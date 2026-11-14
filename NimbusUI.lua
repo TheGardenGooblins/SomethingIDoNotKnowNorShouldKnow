@@ -76,6 +76,8 @@ local DEFAULT_THEME = {
 }
 
 Library.DefaultTheme = table.freeze(table.clone(DEFAULT_THEME))
+-- Print this to check which copy of the library a game is running.
+Library.Version = "1.2.0"
 
 local THEME_COLOR_KEYS = { "Background", "Panel", "Section", "Element", "Hover", "Border", "Text", "SubText" }
 
@@ -916,6 +918,18 @@ function Library:SetTheme(changes)
 		if typeof(changes[key]) == "Color3" then
 			self.Theme[key] = changes[key]
 			changed[key] = true
+		end
+	end
+	-- Say so when an entry is ignored; a misspelt name or a value that is not
+	-- a Color3 would otherwise look like a colour that refuses to change.
+	for key, value in pairs(changes) do
+		local known = key == "Accent" or table.find(THEME_COLOR_KEYS, key) ~= nil
+		if not known then
+			if DEFAULT_THEME[key] == nil then
+				warn("[NimbusUI] SetTheme: unknown theme colour '" .. tostring(key) .. "'")
+			end
+		elseif typeof(value) ~= "Color3" then
+			warn("[NimbusUI] SetTheme: '" .. key .. "' must be a Color3, got " .. typeof(value))
 		end
 	end
 	self:_repaint(changed)

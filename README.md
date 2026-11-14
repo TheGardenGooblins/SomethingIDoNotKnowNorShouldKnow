@@ -145,6 +145,8 @@ The colour names are `Background`, `Panel`, `Section`, `Element`, `Hover`, `Bord
 
 Two theme names can share one colour, for example the same colour for `Background`, `Panel` and `Section` in a flat theme. The library records which name each object uses, so a later `SetTheme` still changes the right objects.
 
+`SetTheme` only changes the names you pass. For example, if you pass `Background` and not `Section`, the sections keep their colour. It writes a warning to the output when a name is unknown or a value is not a `Color3`.
+
 `SetTheme` does not change `Font`, `FontBold` or `TextSize`. Set those in `Theme` when you call `Library.new`.
 
 ## Errors in callbacks
