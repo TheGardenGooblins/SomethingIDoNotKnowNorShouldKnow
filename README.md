@@ -38,7 +38,32 @@ UI:Notify({ Title = "Hello", Text = "Menu loaded", Type = "Success" })
 
 A dropdown shows at most `MaxVisible` options (8 by default) and scrolls when it has more.
 
-Every element returns an object with `:Set(value, silent)` and `:Get()`. Buttons and labels use `:SetText` and `:Set` instead.
+Every element returns an object with `:Set(value, silent)` and `:Get()`. Buttons and labels use `:SetText` and `:Set` instead. Every element also takes `DependsOn` and has `:SetVisible(bool)`; see [Showing and hiding elements](#showing-and-hiding-elements).
+
+## Showing and hiding elements
+
+Every element has `:SetVisible(bool)` and `:IsVisible()`. A hidden element takes no space. Sections have `:SetVisible(bool)` too.
+
+```lua
+local hint = section:Label("Only shown when needed")
+hint:SetVisible(false)
+```
+
+Use the option `DependsOn = toggle` to show an element only while a toggle is on. Every element accepts it.
+
+```lua
+local crosshair = section:Toggle({ Name = "Custom crosshair", Flag = "crosshair" })
+
+section:Slider({ Name = "Crosshair size", Min = 4, Max = 40, DependsOn = crosshair })
+section:ColorPicker({ Name = "Crosshair colour", DependsOn = crosshair })
+section:Label({ Text = "Applies to all weapons.", DependsOn = crosshair })
+```
+
+- Dependencies chain. If toggle B depends on toggle A, an element that depends on B is hidden while A is off.
+- `SetVisible(false)` always hides the element, even when its toggle is on.
+- A hidden element keeps its value, and configs still save and load it.
+- `toggle:OnChanged(fn)` calls `fn(state)` on every change of the toggle. It returns a function that removes the listener.
+- `element.Instance` is the element's top GUI object, if you need to style it.
 
 ## Toggle attachments
 

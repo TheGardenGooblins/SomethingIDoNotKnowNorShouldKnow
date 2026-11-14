@@ -22,6 +22,9 @@
 		section:Label(text)
 
 		Every element returns an object with :Set(value, silent) / :Get() (Button/Label: :SetText / :Set).
+		Every element also has :SetVisible(bool) / :IsVisible() and takes the option
+		DependsOn = toggle, which shows the element only while that toggle is on.
+		Toggles have :OnChanged(fn). Sections have :SetVisible(bool) too.
 
 		UI:Notify { Title, Text, Duration, Type = "Info"|"Success"|"Warning"|"Error" }
 		UI:SetAccent(Color3)   UI:SetOpen(bool)   UI:Destroy()
@@ -1081,6 +1084,65 @@ function Section:_next()
 	return self._order
 end
 
+-- Shows or hides the whole section.
+function Section:SetVisible(visible)
+	self.Frame.Visible = visible ~= false
+end
+
+function Section:IsVisible()
+	return self.Frame.Visible
+end
+
+-- Gives an element its visibility API and applies the DependsOn option:
+--   element:SetVisible(bool)   element:IsVisible()   element.Instance
+-- An element is shown when SetVisible has not hidden it and, if DependsOn is
+-- set, while that toggle is on and visible. The layouts skip hidden elements,
+-- so the section closes the gap.
+local function finishElement(element, root, opts)
+	local wanted = true -- what SetVisible asked for
+	local allowed = true -- what DependsOn allows
+	local listeners = {}
+
+	local function apply()
+		local visible = wanted and allowed
+		if root.Visible ~= visible then
+			root.Visible = visible
+			for _, listener in ipairs(listeners) do
+				listener(visible)
+			end
+		end
+	end
+
+	element.Instance = root
+	function element:SetVisible(visible)
+		wanted = visible ~= false
+		apply()
+	end
+	function element:IsVisible()
+		return wanted and allowed
+	end
+	function element:_onVisible(listener)
+		table.insert(listeners, listener)
+	end
+
+	local dependency = type(opts) == "table" and opts.DependsOn or nil
+	if dependency ~= nil then
+		if type(dependency) == "table" and type(dependency.OnChanged) == "function" then
+			local function check()
+				allowed = dependency:Get() == true and dependency:IsVisible()
+				apply()
+			end
+			dependency:OnChanged(check)
+			-- follow the toggle's own visibility too, so chains of dependencies work
+			dependency:_onVisible(check)
+			check()
+		else
+			warn("[NimbusUI] DependsOn must be a toggle created by section:Toggle")
+		end
+	end
+	return element
+end
+
 local function makeLabel(theme, props)
 	local base = {
 		BackgroundTransparency = 1,
@@ -1196,7 +1258,7 @@ function Section:Slider(opts)
 	lib:_registerFlag(opts.Flag, value, function(v)
 		slider:Set(v)
 	end)
-	return slider
+	return finishElement(slider, holder, opts)
 end
 
 -- Dropdown -------------------------------------------------------------
@@ -1397,7 +1459,7 @@ function Section:Dropdown(opts)
 	lib:_registerFlag(opts.Flag, dropdown:Get(), function(v)
 		dropdown:Set(v)
 	end)
-	return dropdown
+	return finishElement(dropdown, holder, opts)
 end
 
 -- Keybind --------------------------------------------------------------
@@ -1542,7 +1604,7 @@ function Section:Keybind(opts)
 
 	local bind = buildKeybind(lib, row, opts)
 	lib:_attachTooltip(row, opts.Tooltip)
-	return bind
+	return finishElement(bind, row, opts)
 end
 
 -- Color picker ---------------------------------------------------------
@@ -1749,7 +1811,7 @@ function Section:ColorPicker(opts)
 
 	local picker = buildColorPicker(lib, row, holder, opts)
 	lib:_attachTooltip(row, opts.Tooltip)
-	return picker
+	return finishElement(picker, holder, opts)
 end
 
 -- Toggle ---------------------------------------------------------------
@@ -1805,13 +1867,29 @@ function Section:Toggle(opts)
 	})
 
 	local toggle = {}
+	local changeListeners = {}
 	function toggle:Set(value, silent)
 		state = value == true
 		fill.Visible = state
 		label.TextColor3 = state and theme.Text or theme.SubText
 		lib:_updateFlag(opts.Flag, state)
+		-- listeners run on silent changes too, so dependent elements stay correct
+		for _, listener in ipairs(changeListeners) do
+			listener(state)
+		end
 		if not silent then
 			safeCall(opts.Callback, state)
+		end
+	end
+	-- Calls fn(state) every time the toggle changes. Returns a function that
+	-- removes the listener.
+	function toggle:OnChanged(fn)
+		table.insert(changeListeners, fn)
+		return function()
+			local index = table.find(changeListeners, fn)
+			if index then
+				table.remove(changeListeners, index)
+			end
 		end
 	end
 	function toggle:Get()
@@ -1877,7 +1955,7 @@ function Section:Toggle(opts)
 		end
 		local bind, button = buildKeybind(lib, row, bindOpts, attachProps(m.BindWidth))
 		lib:_attachTooltip(button, bindOpts.Tooltip)
-		return bind
+		return finishElement(bind, button, bindOpts)
 	end
 
 	-- Adds an inline colour swatch. Its picker panel opens below the toggle row.
@@ -1886,7 +1964,7 @@ function Section:Toggle(opts)
 		local picker, swatch =
 			buildColorPicker(lib, row, holder, pickerOpts, attachProps(m.SwatchW), attachCount + 2)
 		lib:_attachTooltip(swatch, pickerOpts.Tooltip)
-		return picker
+		return finishElement(picker, swatch, pickerOpts)
 	end
 
 	lib:_onClick(row, function()
@@ -1902,7 +1980,7 @@ function Section:Toggle(opts)
 	lib:_registerFlag(opts.Flag, state, function(v)
 		toggle:Set(v)
 	end)
-	return toggle
+	return finishElement(toggle, holder, opts)
 end
 
 -- Textbox --------------------------------------------------------------
@@ -1969,7 +2047,7 @@ function Section:Textbox(opts)
 	lib:_registerFlag(opts.Flag, value, function(text)
 		textbox:Set(text)
 	end)
-	return textbox
+	return finishElement(textbox, holder, opts)
 end
 
 -- Button ---------------------------------------------------------------
@@ -2006,15 +2084,20 @@ function Section:Button(opts)
 	end)
 
 	lib:_attachTooltip(button, opts.Tooltip)
-	return {
+	return finishElement({
 		SetText = function(_, text)
 			button.Text = text
 		end,
-	}
+	}, button, opts)
 end
 
 -- Label ----------------------------------------------------------------
-function Section:Label(text)
+-- Accepts a string, or a table { Text, DependsOn }.
+function Section:Label(text, opts)
+	if type(text) == "table" then
+		opts = text
+		text = opts.Text
+	end
 	local theme = self.Library.Theme
 	local label = makeLabel(theme, {
 		Size = UDim2.new(1, 0, 0, 0),
@@ -2026,11 +2109,11 @@ function Section:Label(text)
 		LayoutOrder = self:_next(),
 		Parent = self.Content,
 	})
-	return {
+	return finishElement({
 		Set = function(_, newText)
 			label.Text = newText
 		end,
-	}
+	}, label, opts)
 end
 
 return Library

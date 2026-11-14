@@ -202,6 +202,44 @@ zoom:AddKeybind({ Flag = "zoom_key", Default = Enum.KeyCode.Z, Mode = "Hold" })
 local outline = attachments:Toggle({ Name = "Outline", Flag = "outline" })
 outline:AddColorPicker({ Flag = "outline_colour", Default = Color3.fromRGB(255, 90, 90) })
 
+-- Conditional visibility: DependsOn shows an element only while a toggle is on.
+local visibility = advanced:Section("Conditional visibility", "Right")
+
+local crosshair = visibility:Toggle({ Name = "Custom crosshair", Flag = "crosshair" })
+
+visibility:Slider({
+	Name = "Crosshair size",
+	Flag = "crosshair_size",
+	Min = 4,
+	Max = 40,
+	Default = 12,
+	Suffix = "px",
+	DependsOn = crosshair,
+})
+local crosshairDot = visibility:Toggle({
+	Name = "Centre dot",
+	Flag = "crosshair_dot",
+	DependsOn = crosshair,
+})
+-- Dependencies chain: this needs "Centre dot", which itself needs "Custom crosshair".
+visibility:ColorPicker({
+	Name = "Dot colour",
+	Flag = "crosshair_dot_colour",
+	Default = Color3.fromRGB(255, 255, 255),
+	DependsOn = crosshairDot,
+})
+visibility:Label("Turn on \"Custom crosshair\" to see its settings.")
+
+-- SetVisible shows or hides any element from code.
+local secret = visibility:Label("You found the hidden label.")
+secret:SetVisible(false)
+visibility:Button({
+	Name = "Show / hide a label",
+	Callback = function()
+		secret:SetVisible(not secret:IsVisible())
+	end,
+})
+
 ------------------------------------------------------------------------
 -- Tab 3: settings for the menu itself
 ------------------------------------------------------------------------
