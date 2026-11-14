@@ -11,6 +11,8 @@
 		local section = tab:Section("Name", "Left" | "Right")
 
 		section:Toggle      { Name, Default, Flag, Tooltip, Callback(bool) }
+			-> :AddKeybind { Default, Mode, Flag, Sync, Tooltip, Callback(bool), Changed(key) }
+			-> :AddColorPicker { Default, Flag, Tooltip, Callback(Color3) }
 		section:Slider      { Name, Min, Max, Default, Step, Suffix, Flag, Tooltip, Callback(number) }
 		section:Dropdown    { Name, Options, Default, Multi, MaxVisible, Flag, Tooltip, Callback(value) }   -> :Refresh(options)
 		section:Keybind     { Name, Default, Mode = "Press"|"Toggle"|"Hold", Flag, Callback, Changed(key) }
@@ -1093,78 +1095,6 @@ local function makeLabel(theme, props)
 	return create("TextLabel", base)
 end
 
--- Toggle ---------------------------------------------------------------
-function Section:Toggle(opts)
-	opts = opts or {}
-	local lib = self.Library
-	local theme = lib.Theme
-	local m = lib._m
-	local state = opts.Default == true
-
-	local row = create("TextButton", {
-		AutoButtonColor = false,
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, m.Row),
-		Text = "",
-		LayoutOrder = self:_next(),
-		Parent = self.Content,
-	})
-	local box = create("Frame", {
-		BackgroundColor3 = theme.Element,
-		BorderSizePixel = 0,
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.fromScale(0, 0.5),
-		Size = UDim2.fromOffset(m.Check, m.Check),
-		Parent = row,
-	})
-	local boxStroke = addStroke(box, theme.Border)
-	local fill = create("Frame", {
-		BackgroundColor3 = theme.Accent,
-		BorderSizePixel = 0,
-		Position = UDim2.fromOffset(2, 2),
-		Size = UDim2.new(1, -4, 1, -4),
-		Visible = state,
-		Parent = box,
-	})
-	lib:_trackAccent(fill, "BackgroundColor3")
-	local label = makeLabel(theme, {
-		Position = UDim2.fromOffset(m.Check + 8, 0),
-		Size = UDim2.new(1, -(m.Check + 8), 1, 0),
-		TextColor3 = state and theme.Text or theme.SubText,
-		Text = opts.Name or "Toggle",
-		Parent = row,
-	})
-
-	local toggle = {}
-	function toggle:Set(value, silent)
-		state = value == true
-		fill.Visible = state
-		label.TextColor3 = state and theme.Text or theme.SubText
-		lib:_updateFlag(opts.Flag, state)
-		if not silent then
-			safeCall(opts.Callback, state)
-		end
-	end
-	function toggle:Get()
-		return state
-	end
-
-	lib:_onClick(row, function()
-		toggle:Set(not state)
-	end)
-	row.MouseEnter:Connect(function()
-		boxStroke.Color = theme.Accent
-	end)
-	row.MouseLeave:Connect(function()
-		boxStroke.Color = theme.Border
-	end)
-	lib:_attachTooltip(row, opts.Tooltip)
-	lib:_registerFlag(opts.Flag, state, function(v)
-		toggle:Set(v)
-	end)
-	return toggle
-end
-
 -- Slider ---------------------------------------------------------------
 function Section:Slider(opts)
 	opts = opts or {}
@@ -1471,27 +1401,18 @@ function Section:Dropdown(opts)
 end
 
 -- Keybind --------------------------------------------------------------
-function Section:Keybind(opts)
-	opts = opts or {}
-	local lib = self.Library
+
+-- Builds a keybind button inside `parent` and wires up its behaviour.
+-- Shared by Section:Keybind and toggle:AddKeybind. `props` overrides the
+-- button's default properties.
+local function buildKeybind(lib, parent, opts, props)
 	local theme = lib.Theme
 	local m = lib._m
 	local key = opts.Default
 	local mode = opts.Mode or "Press"
 	local active = false
 
-	local row = create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, m.Row),
-		LayoutOrder = self:_next(),
-		Parent = self.Content,
-	})
-	makeLabel(theme, {
-		Size = UDim2.new(1, -(m.BindWidth + 6), 1, 0),
-		Text = opts.Name or "Keybind",
-		Parent = row,
-	})
-	local button = create("TextButton", {
+	local buttonProps = {
 		AutoButtonColor = false,
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
@@ -1502,8 +1423,12 @@ function Section:Keybind(opts)
 		TextSize = 11,
 		TextColor3 = theme.SubText,
 		Text = "[None]",
-		Parent = row,
-	})
+		Parent = parent,
+	}
+	for k, v in pairs(props or {}) do
+		buttonProps[k] = v
+	end
+	local button = create("TextButton", buttonProps)
 	addStroke(button, theme.Border)
 
 	local function keyName(k)
@@ -1591,43 +1516,47 @@ function Section:Keybind(opts)
 	})
 
 	render()
-	lib:_attachTooltip(row, opts.Tooltip)
 	lib:_registerFlag(opts.Flag, key or false, function(v)
 		bind:Set(v or nil)
 	end)
+	return bind, button
+end
+
+function Section:Keybind(opts)
+	opts = opts or {}
+	local lib = self.Library
+	local theme = lib.Theme
+	local m = lib._m
+
+	local row = create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, m.Row),
+		LayoutOrder = self:_next(),
+		Parent = self.Content,
+	})
+	makeLabel(theme, {
+		Size = UDim2.new(1, -(m.BindWidth + 6), 1, 0),
+		Text = opts.Name or "Keybind",
+		Parent = row,
+	})
+
+	local bind = buildKeybind(lib, row, opts)
+	lib:_attachTooltip(row, opts.Tooltip)
 	return bind
 end
 
 -- Color picker ---------------------------------------------------------
-function Section:ColorPicker(opts)
-	opts = opts or {}
-	local lib = self.Library
+
+-- Builds a colour swatch inside `swatchParent` and the picker panel it opens
+-- inside `panelParent`. Shared by Section:ColorPicker and toggle:AddColorPicker.
+-- `swatchProps` overrides the swatch's default properties.
+local function buildColorPicker(lib, swatchParent, panelParent, opts, swatchProps, panelOrder)
 	local theme = lib.Theme
 	local m = lib._m
 	local color = opts.Default or Color3.new(1, 1, 1)
 	local h, s, v = color:ToHSV()
 
-	local holder = create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		LayoutOrder = self:_next(),
-		Parent = self.Content,
-	})
-	addList(holder, 4)
-
-	local row = create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, m.Row),
-		LayoutOrder = 1,
-		Parent = holder,
-	})
-	makeLabel(theme, {
-		Size = UDim2.new(1, -(m.SwatchW + 8), 1, 0),
-		Text = opts.Name or "Color",
-		Parent = row,
-	})
-	local swatch = create("TextButton", {
+	local props = {
 		AutoButtonColor = false,
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
@@ -1635,16 +1564,20 @@ function Section:ColorPicker(opts)
 		BackgroundColor3 = color,
 		BorderSizePixel = 0,
 		Text = "",
-		Parent = row,
-	})
+		Parent = swatchParent,
+	}
+	for k, value in pairs(swatchProps or {}) do
+		props[k] = value
+	end
+	local swatch = create("TextButton", props)
 	addStroke(swatch, theme.Border)
 
 	local panel = create("Frame", {
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 0, 108 + m.Field),
 		Visible = false,
-		LayoutOrder = 2,
-		Parent = holder,
+		LayoutOrder = panelOrder or 2,
+		Parent = panelParent,
 	})
 
 	local sv = create("TextButton", {
@@ -1744,6 +1677,10 @@ function Section:ColorPicker(opts)
 	function picker:Get()
 		return color
 	end
+	-- Opens or closes the picker panel.
+	function picker:SetOpen(open)
+		panel.Visible = open == true
+	end
 
 	sv.InputBegan:Connect(function(input)
 		if not isPointer(input) then
@@ -1777,11 +1714,195 @@ function Section:ColorPicker(opts)
 	end)
 
 	render()
-	lib:_attachTooltip(row, opts.Tooltip)
 	lib:_registerFlag(opts.Flag, color, function(c)
 		picker:Set(c)
 	end)
+	return picker, swatch, panel
+end
+
+function Section:ColorPicker(opts)
+	opts = opts or {}
+	local lib = self.Library
+	local theme = lib.Theme
+	local m = lib._m
+
+	local holder = create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		LayoutOrder = self:_next(),
+		Parent = self.Content,
+	})
+	addList(holder, 4)
+
+	local row = create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, m.Row),
+		LayoutOrder = 1,
+		Parent = holder,
+	})
+	makeLabel(theme, {
+		Size = UDim2.new(1, -(m.SwatchW + 8), 1, 0),
+		Text = opts.Name or "Color",
+		Parent = row,
+	})
+
+	local picker = buildColorPicker(lib, row, holder, opts)
+	lib:_attachTooltip(row, opts.Tooltip)
 	return picker
+end
+
+-- Toggle ---------------------------------------------------------------
+function Section:Toggle(opts)
+	opts = opts or {}
+	local lib = self.Library
+	local theme = lib.Theme
+	local m = lib._m
+	local state = opts.Default == true
+
+	-- `holder` stacks the toggle row and any colour picker panels attached to it.
+	local holder = create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		LayoutOrder = self:_next(),
+		Parent = self.Content,
+	})
+	addList(holder, 4)
+	local row = create("TextButton", {
+		AutoButtonColor = false,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, m.Row),
+		Text = "",
+		LayoutOrder = 1,
+		Parent = holder,
+	})
+	local box = create("Frame", {
+		BackgroundColor3 = theme.Element,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(m.Check, m.Check),
+		Parent = row,
+	})
+	local boxStroke = addStroke(box, theme.Border)
+	local fill = create("Frame", {
+		BackgroundColor3 = theme.Accent,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(2, 2),
+		Size = UDim2.new(1, -4, 1, -4),
+		Visible = state,
+		Parent = box,
+	})
+	lib:_trackAccent(fill, "BackgroundColor3")
+	local label = makeLabel(theme, {
+		Position = UDim2.fromOffset(m.Check + 8, 0),
+		Size = UDim2.new(1, -(m.Check + 8), 1, 0),
+		TextColor3 = state and theme.Text or theme.SubText,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Text = opts.Name or "Toggle",
+		Parent = row,
+	})
+
+	local toggle = {}
+	function toggle:Set(value, silent)
+		state = value == true
+		fill.Visible = state
+		label.TextColor3 = state and theme.Text or theme.SubText
+		lib:_updateFlag(opts.Flag, state)
+		if not silent then
+			safeCall(opts.Callback, state)
+		end
+	end
+	function toggle:Get()
+		return state
+	end
+
+	-- Attachments: a keybind and/or colour swatch on the right of the row.
+	local attach
+	local attachCount = 0
+	local attachWidth = 0
+	local function attachProps(width)
+		if not attach then
+			attach = create("Frame", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.fromScale(1, 0),
+				Size = UDim2.fromScale(0, 1),
+				AutomaticSize = Enum.AutomaticSize.X,
+				ZIndex = 2,
+				Parent = row,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Right,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				Padding = UDim.new(0, 6),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Parent = attach,
+			})
+		end
+		attachCount += 1
+		attachWidth += width + 6
+		-- keep the label clear of the attachments
+		label.Size = UDim2.new(1, -(m.Check + 8) - attachWidth, 1, 0)
+		return {
+			AnchorPoint = Vector2.new(0, 0),
+			Position = UDim2.new(),
+			ZIndex = 2,
+			LayoutOrder = -attachCount, -- the first attachment sits furthest right
+			Parent = attach,
+		}
+	end
+
+	-- Adds an inline keybind. By default the key drives the toggle:
+	--   Mode "Toggle" (default) or "Press": each press flips the toggle
+	--   Mode "Hold": the toggle is on while the key is held
+	-- Callback receives the toggle's new state. Pass Sync = false for a plain
+	-- keybind that does not change the toggle.
+	function toggle:AddKeybind(bindOpts)
+		bindOpts = table.clone(bindOpts or {})
+		local mode = bindOpts.Mode or "Toggle"
+		local callback = bindOpts.Callback
+		bindOpts.Mode = mode
+		if bindOpts.Sync ~= false then
+			bindOpts.Callback = function(held)
+				if mode == "Hold" then
+					toggle:Set(held == true)
+				else
+					toggle:Set(not state)
+				end
+				safeCall(callback, state)
+			end
+		end
+		local bind, button = buildKeybind(lib, row, bindOpts, attachProps(m.BindWidth))
+		lib:_attachTooltip(button, bindOpts.Tooltip)
+		return bind
+	end
+
+	-- Adds an inline colour swatch. Its picker panel opens below the toggle row.
+	function toggle:AddColorPicker(pickerOpts)
+		pickerOpts = pickerOpts or {}
+		local picker, swatch =
+			buildColorPicker(lib, row, holder, pickerOpts, attachProps(m.SwatchW), attachCount + 2)
+		lib:_attachTooltip(swatch, pickerOpts.Tooltip)
+		return picker
+	end
+
+	lib:_onClick(row, function()
+		toggle:Set(not state)
+	end)
+	row.MouseEnter:Connect(function()
+		boxStroke.Color = theme.Accent
+	end)
+	row.MouseLeave:Connect(function()
+		boxStroke.Color = theme.Border
+	end)
+	lib:_attachTooltip(row, opts.Tooltip)
+	lib:_registerFlag(opts.Flag, state, function(v)
+		toggle:Set(v)
+	end)
+	return toggle
 end
 
 -- Textbox --------------------------------------------------------------

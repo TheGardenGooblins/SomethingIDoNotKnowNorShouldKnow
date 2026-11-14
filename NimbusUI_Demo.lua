@@ -159,7 +159,51 @@ choices:ColorPicker({
 })
 
 ------------------------------------------------------------------------
--- Tab 2: settings for the menu itself
+-- Tab 2: newer features
+------------------------------------------------------------------------
+local advanced = UI:Tab("Advanced")
+
+-- Toggle attachments: a keybind and/or a colour swatch on the toggle's own row.
+local attachments = advanced:Section("Toggle attachments", "Left")
+
+local nameTags = attachments:Toggle({
+	Name = "Name tags",
+	Flag = "name_tags",
+	Default = true,
+	Callback = function(on)
+		print("Name tags:", on)
+	end,
+})
+-- The key flips the toggle (Mode "Toggle" is the default for attachments).
+nameTags:AddKeybind({
+	Flag = "name_tags_key",
+	Default = Enum.KeyCode.N,
+	Tooltip = "Key that turns name tags on and off",
+})
+nameTags:AddColorPicker({
+	Flag = "name_tags_colour",
+	Default = Color3.fromRGB(120, 200, 255),
+	Callback = function(color)
+		print("Name tag colour:", color)
+	end,
+})
+
+-- Mode "Hold": the toggle is on only while the key is held.
+local zoom = attachments:Toggle({
+	Name = "Zoom",
+	Flag = "zoom",
+	Callback = function(on)
+		print("Zoom:", on)
+	end,
+})
+zoom:AddKeybind({ Flag = "zoom_key", Default = Enum.KeyCode.Z, Mode = "Hold" })
+
+-- A toggle with only a colour swatch.
+local outline = attachments:Toggle({ Name = "Outline", Flag = "outline" })
+outline:AddColorPicker({ Flag = "outline_colour", Default = Color3.fromRGB(255, 90, 90) })
+
+------------------------------------------------------------------------
+-- Tab 3: settings for the menu itself
 ------------------------------------------------------------------------
 local settings = UI:Tab("Settings")
 

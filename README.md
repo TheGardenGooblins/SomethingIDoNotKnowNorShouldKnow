@@ -40,6 +40,31 @@ A dropdown shows at most `MaxVisible` options (8 by default) and scrolls when it
 
 Every element returns an object with `:Set(value, silent)` and `:Get()`. Buttons and labels use `:SetText` and `:Set` instead.
 
+## Toggle attachments
+
+A toggle can hold a keybind and a colour swatch on its own row.
+
+```lua
+local tags = section:Toggle({ Name = "Name tags", Flag = "name_tags" })
+
+local key = tags:AddKeybind({ Flag = "name_tags_key", Default = Enum.KeyCode.N })
+local colour = tags:AddColorPicker({ Flag = "name_tags_colour", Default = Color3.fromRGB(120, 200, 255) })
+```
+
+| Method | Options | Returns |
+|---|---|---|
+| `toggle:AddKeybind` | `Default, Mode, Flag, Sync, Tooltip, Callback(bool), Changed(key)` | a keybind object |
+| `toggle:AddColorPicker` | `Default, Flag, Tooltip, Callback(Color3)` | a colour picker object |
+
+The key of an attached keybind controls the toggle:
+
+- `Mode = "Toggle"` (the default) or `"Press"`: each press turns the toggle on or off.
+- `Mode = "Hold"`: the toggle is on while the key is held.
+
+`Callback` gets the new state of the toggle. Pass `Sync = false` if the key must not change the toggle. The keybind then works like a normal `Keybind` element.
+
+The picker of an attached swatch opens below the toggle row. Give each attachment its own `Flag` to save it in configs.
+
 ## Mobile
 
 On a touch device (`UserInputService.TouchEnabled`) the library does this by itself:
