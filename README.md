@@ -118,6 +118,13 @@ UI:Notify({ Title = "Saved", Text = "Settings saved.", Duration = 4, Type = "Suc
 -- Type: "Info" (accent colour), "Success", "Warning", "Error"
 ```
 
+A notification closes after `Duration` seconds (4 by default). Pass `Persistent = true` to keep it until the player clicks it or your code closes it:
+
+```lua
+local banner = UI:Notify({ Title = "Maintenance", Text = "Servers restart soon.", Type = "Warning", Persistent = true })
+banner.Close()
+```
+
 Notifications stack in the bottom-right corner. Pass `NotifyPosition = "TopRight"` to `Library.new` to move them to the top-right. Click a notification to dismiss it.
 
 ## Other methods

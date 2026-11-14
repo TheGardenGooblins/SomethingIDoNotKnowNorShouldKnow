@@ -26,7 +26,7 @@
 		DependsOn = toggle, which shows the element only while that toggle is on.
 		Toggles have :OnChanged(fn). Sections have :SetVisible(bool) too.
 
-		UI:Notify { Title, Text, Duration, Type = "Info"|"Success"|"Warning"|"Error" }
+		UI:Notify { Title, Text, Duration, Persistent, Type = "Info"|"Success"|"Warning"|"Error" }   -> :Close()
 		UI:SetAccent(Color3)   UI:SetOpen(bool)   UI:Destroy()
 		UI:SaveConfig(name)    UI:LoadConfig(name)    UI:DeleteConfig(name)    UI:ListConfigs() -> { name }
 		UI:SetConfigStore { Save(name, json), Load(name), List(), Delete(name) }   (or the ConfigStore option)
@@ -796,7 +796,9 @@ function Library:Notify(opts)
 	opts = opts or {}
 
 	local theme = self.Theme
-	local duration = opts.Duration or 4
+	local duration = tonumber(opts.Duration) or 4
+	-- A persistent notification stays until it is clicked or :Close() is called.
+	local persistent = opts.Persistent == true or duration <= 0 or duration == math.huge
 	local color = NOTIFY_COLORS[opts.Type or ""] or theme.Accent
 
 	self._notifyCount += 1
@@ -861,10 +863,11 @@ function Library:Notify(opts)
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.fromScale(0, 1),
 		Size = UDim2.new(1, 0, 0, 2),
+		Visible = not persistent,
 		Parent = toast,
 	})
 
-	local entry = {}
+	local entry = { Persistent = persistent }
 	local closed = false
 	function entry.Close()
 		if closed then
@@ -888,12 +891,23 @@ function Library:Notify(opts)
 	end)
 
 	tween(toast, 0.25, { GroupTransparency = 0 })
-	tween(progress, duration, { Size = UDim2.new(0, 0, 0, 2) }, Enum.EasingStyle.Linear)
-	task.delay(duration, entry.Close)
+	if not persistent then
+		tween(progress, duration, { Size = UDim2.new(0, 0, 0, 2) }, Enum.EasingStyle.Linear)
+		task.delay(duration, entry.Close)
+	end
 
 	table.insert(self._notifications, entry)
 	if #self._notifications > self.MaxNotifications then
-		self._notifications[1].Close()
+		-- make room: close the oldest timed notification, or the oldest one if
+		-- every notification is persistent
+		local oldest = self._notifications[1]
+		for _, other in ipairs(self._notifications) do
+			if not other.Persistent and other ~= entry then
+				oldest = other
+				break
+			end
+		end
+		oldest.Close()
 	end
 
 	return entry

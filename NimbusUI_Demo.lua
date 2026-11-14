@@ -275,6 +275,25 @@ for _, kind in ipairs({ "Info", "Success", "Warning", "Error" }) do
 	})
 end
 
+-- A persistent notification stays until it is clicked or closed from code.
+local banner
+notifications:Button({
+	Name = "Persistent on / off",
+	Callback = function()
+		if banner then
+			banner.Close()
+			banner = nil
+		else
+			banner = UI:Notify({
+				Title = "Maintenance",
+				Text = "This stays until you click it or press the button again.",
+				Type = "Warning",
+				Persistent = true,
+			})
+		end
+	end,
+})
+
 local configs = settings:Section("Configs", "Right")
 
 -- A dropdown that lists the saved configs, a name box, and Save / Load / Delete
