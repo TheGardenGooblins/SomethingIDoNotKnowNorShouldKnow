@@ -6,7 +6,7 @@
 
 	API overview
 		local UI = Library.new({ Title, Subtitle, Size, Accent, ToggleKey, NotifyPosition, ConfigFolder,
-		                         MobileButton, TouchMode, ConfigStore })
+		                         MobileButton, TouchMode, ConfigStore, NotifyErrors, OnError(message) })
 		local tab = UI:Tab("Name")
 		local section = tab:Section("Name", "Left" | "Right")
 
@@ -38,6 +38,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
 
 -- Optional functions that only some environments define; they are nil in a
@@ -183,6 +184,13 @@ local function isMove(input)
 		or input.UserInputType == Enum.UserInputType.Touch
 end
 
+-- Functions that are told about errors in callbacks (see the OnError and
+-- NotifyErrors options of Library.new).
+local errorListeners = {}
+
+-- Runs a callback in its own thread, so a callback that yields or fails
+-- cannot stop the menu. An error is written to the output and passed to the
+-- error listeners.
 local function safeCall(fn, ...)
 	if typeof(fn) ~= "function" then
 		return
@@ -191,7 +199,11 @@ local function safeCall(fn, ...)
 	task.spawn(function()
 		local ok, err = pcall(fn, table.unpack(args, 1, args.n))
 		if not ok then
-			warn("[NimbusUI] callback error: " .. tostring(err))
+			local message = tostring(err)
+			warn("[NimbusUI] callback error: " .. message)
+			for _, listener in ipairs(table.clone(errorListeners)) do
+				task.spawn(listener, message)
+			end
 		end
 	end)
 end
@@ -472,6 +484,28 @@ function Library.new(options)
 	notifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
 
 	self:SetConfigStore(options.ConfigStore)
+
+	-- Callback errors: always written to the output. NotifyErrors also shows
+	-- them as a notification (on by default in Studio), and OnError(message)
+	-- lets the game handle them.
+	local notifyErrors = options.NotifyErrors
+	if notifyErrors == nil then
+		notifyErrors = RunService:IsStudio()
+	end
+	if notifyErrors or typeof(options.OnError) == "function" then
+		self._errorListener = function(message)
+			if notifyErrors then
+				self:Notify({ Title = "Callback error", Text = message, Type = "Error", Duration = 8 })
+			end
+			if typeof(options.OnError) == "function" then
+				local ok, err = pcall(options.OnError, message)
+				if not ok then
+					warn("[NimbusUI] OnError failed: " .. tostring(err))
+				end
+			end
+		end
+		table.insert(errorListeners, self._errorListener)
+	end
 
 	-- Global input --------------------------------------------------------
 	self:_connect(UserInputService.InputBegan, function(input, gameProcessed)
@@ -780,6 +814,10 @@ function Library:Destroy()
 	end
 	table.clear(self._connections)
 	table.clear(self._keybinds)
+	local listenerIndex = table.find(errorListeners, self._errorListener)
+	if listenerIndex then
+		table.remove(errorListeners, listenerIndex)
+	end
 	self._activeDrag = nil
 	self._listeningBind = nil
 	self.Gui:Destroy()

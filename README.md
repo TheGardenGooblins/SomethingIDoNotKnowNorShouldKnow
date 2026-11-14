@@ -127,6 +127,15 @@ banner.Close()
 
 Notifications stack in the bottom-right corner. Pass `NotifyPosition = "TopRight"` to `Library.new` to move them to the top-right. Click a notification to dismiss it.
 
+## Errors in callbacks
+
+Each callback runs in its own thread, so a callback that fails or waits cannot stop the menu. When a callback fails, the library always writes the error to the output. It can also tell you in two other ways:
+
+| Option of `Library.new` | Meaning |
+|---|---|
+| `NotifyErrors = true` or `false` | Show the error as a red notification. The default is `true` in Studio and `false` in a live game. |
+| `OnError = function(message) end` | Call your function with the error message, for example to log it. |
+
 ## Other methods
 
 - `UI:SetAccent(Color3)` changes the accent colour while the game runs.
