@@ -11,7 +11,7 @@
 
 		section:Toggle      { Name, Default, Flag, Tooltip, Callback(bool) }
 		section:Slider      { Name, Min, Max, Default, Step, Suffix, Flag, Tooltip, Callback(number) }
-		section:Dropdown    { Name, Options, Default, Multi, Flag, Tooltip, Callback(value) }   -> :Refresh(options)
+		section:Dropdown    { Name, Options, Default, Multi, MaxVisible, Flag, Tooltip, Callback(value) }   -> :Refresh(options)
 		section:Keybind     { Name, Default, Mode = "Press"|"Toggle"|"Hold", Flag, Callback, Changed(key) }
 		section:ColorPicker { Name, Default, Flag, Tooltip, Callback(Color3) }
 		section:Textbox     { Name, Default, Placeholder, Flag, Callback(text, enterPressed) }
@@ -1106,11 +1106,18 @@ function Section:Dropdown(opts)
 		Parent = header,
 	})
 
-	local list = create("Frame", {
+	-- The option list scrolls once it has more than `maxVisible` rows.
+	local optionHeight = 18
+	local maxVisible = math.max(1, math.floor(tonumber(opts.MaxVisible) or 8))
+	local list = create("ScrollingFrame", {
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
 		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ScrollBarThickness = 2,
+		ScrollBarImageColor3 = theme.SubText,
 		Visible = false,
 		LayoutOrder = 3,
 		Parent = holder,
@@ -1163,11 +1170,12 @@ function Section:Dropdown(opts)
 				BackgroundColor3 = theme.Hover,
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
-				Size = UDim2.new(1, 0, 0, 18),
+				Size = UDim2.new(1, 0, 0, optionHeight),
 				Font = theme.Font,
 				TextSize = 12,
 				TextColor3 = theme.SubText,
 				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
 				Text = tostring(option),
 				LayoutOrder = i,
 				Parent = list,
@@ -1196,6 +1204,9 @@ function Section:Dropdown(opts)
 			end)
 			optionButtons[option] = button
 		end
+		-- 4 = the list's top and bottom padding
+		list.Size = UDim2.new(1, 0, 0, math.min(#options, maxVisible) * optionHeight + 4)
+		list.CanvasPosition = Vector2.new(0, 0)
 		display()
 	end
 

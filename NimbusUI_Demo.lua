@@ -98,6 +98,19 @@ choices:Dropdown({
 	end,
 })
 
+-- Long lists show 8 rows and scroll. Use MaxVisible to change the row count.
+local languages = {}
+for i = 1, 20 do
+	languages[i] = "Language " .. i
+end
+choices:Dropdown({
+	Name = "Language (scrolling list)",
+	Flag = "language",
+	Options = languages,
+	Default = "Language 1",
+	MaxVisible = 8,
+})
+
 choices:Keybind({
 	Name = "Sprint",
 	Flag = "sprint_key",

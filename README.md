@@ -29,12 +29,14 @@ UI:Notify({ Title = "Hello", Text = "Menu loaded", Type = "Success" })
 |---|---|
 | `Toggle` | `Name, Default, Flag, Tooltip, Callback(bool)` |
 | `Slider` | `Name, Min, Max, Default, Step, Suffix, Flag, Tooltip, Callback(number)` |
-| `Dropdown` | `Name, Options, Default, Multi, Flag, Tooltip, Callback(value)`, plus `:Refresh(options)` |
+| `Dropdown` | `Name, Options, Default, Multi, MaxVisible, Flag, Tooltip, Callback(value)`, plus `:Refresh(options)` |
 | `Keybind` | `Name, Default, Mode ("Press"/"Toggle"/"Hold"), Flag, Callback, Changed(key)` |
 | `ColorPicker` | `Name, Default, Flag, Tooltip, Callback(Color3)` |
 | `Textbox` | `Name, Default, Placeholder, Flag, Callback(text, enterPressed)` |
 | `Button` | `Name, Tooltip, Callback()` |
 | `Label(text)` | — |
+
+A dropdown shows at most `MaxVisible` options (8 by default) and scrolls when it has more.
 
 Every element returns an object with `:Set(value, silent)` and `:Get()`. Buttons and labels use `:SetText` and `:Set` instead.
 
