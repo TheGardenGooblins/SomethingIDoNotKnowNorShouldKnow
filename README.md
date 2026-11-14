@@ -6,7 +6,7 @@ A compact, flat dark UI library for Roblox (Luau). It has a draggable window, ta
 
 1. Put `NimbusUI.lua` in a **ModuleScript** named `NimbusUI` in `ReplicatedStorage`.
 2. Put `NimbusUI_Demo.lua` in a **LocalScript** in `StarterPlayerScripts`.
-3. Press Play. **Insert** shows or hides the menu.
+3. Press Play. **Insert** shows or hides the menu. On a phone or tablet, tap the on-screen menu button.
 
 ## Quick start
 
@@ -34,7 +34,8 @@ UI:Notify({ Title = "Hello", Text = "Menu loaded", Type = "Success" })
 | `ColorPicker` | `Name, Default, Flag, Tooltip, Callback(Color3)` |
 | `Textbox` | `Name, Default, Placeholder, Flag, Callback(text, enterPressed)` |
 | `Button` | `Name, Tooltip, Callback()` |
-| `Label(text)` | — |
+| `Label(text)` | — (or `Label({ Text, DependsOn })`) |
+| `ConfigManager` | `Name, Default, Notify, DependsOn, Callback(action, name, ok)`; see [Configs](#configs) |
 
 Click the value of a slider to type an exact number. The slider keeps the number inside `Min` and `Max` and rounds it to `Step`.
 
@@ -122,5 +123,87 @@ Notifications stack in the bottom-right corner. Pass `NotifyPosition = "TopRight
 - `UI:SetAccent(Color3)` changes the accent colour while the game runs.
 - `UI:SetOpen(bool)` shows or hides the menu.
 - `UI:Destroy()` removes the menu and disconnects everything.
-- `UI:SaveConfig(name)` and `UI:LoadConfig(name)` save and load settings by name. They only last for the current session in a normal game.
-- `UI:ExportConfig()` returns a JSON string and `UI:ApplyConfig(json)` loads one, so you can store configs yourself, for example in a DataStore through a RemoteEvent.
+- `UI.Flags` holds the current value of every element that has a `Flag`.
+
+## Configs
+
+A config is the value of every element that has a `Flag`, saved under a name. A name can have 1 to 32 letters, digits, spaces, `-` or `_`.
+
+| Method | What it does |
+|---|---|
+| `UI:SaveConfig(name)` | Saves the current settings. Returns `true` when it worked. |
+| `UI:LoadConfig(name)` | Loads saved settings. Returns `true` when it worked. |
+| `UI:DeleteConfig(name)` | Deletes a config. Returns `true` when it worked. |
+| `UI:ListConfigs()` | Returns the names of the saved configs, sorted. |
+| `UI:ExportConfig()` | Returns the current settings as a JSON string. |
+| `UI:ApplyConfig(json)` | Loads settings from a JSON string. It skips unknown flags and values an element cannot use. |
+
+### Config manager
+
+`section:ConfigManager()` adds a dropdown that lists the saved configs, a name box, and Save, Load, Delete and Refresh buttons.
+
+```lua
+local manager = section:ConfigManager({
+	Name = "Saved configs",   -- label of the dropdown
+	Default = "default",      -- name in the box at the start
+	Notify = true,            -- show a notification after each action
+	Callback = function(action, name, ok) end, -- action is "Save", "Load" or "Delete"
+})
+
+manager:Refresh() -- read the list of configs again
+```
+
+The list updates by itself when you call `UI:SaveConfig` or `UI:DeleteConfig`.
+
+### Where configs are kept
+
+By default, configs stay in memory and are gone when the player leaves. To keep them somewhere else, give the library a config store. A config store is a table with four functions:
+
+```lua
+UI:SetConfigStore({
+	Save = function(name, json) return true end,   -- return true when saved
+	Load = function(name) return json end,         -- return the JSON string, or nil
+	List = function() return { "name1", "name2" } end,
+	Delete = function(name) return true end,
+})
+```
+
+You can also pass the store as `ConfigStore` to `Library.new`. The functions may yield, for example to wait for the server. `SaveConfig`, `LoadConfig`, `DeleteConfig` and `ListConfigs` then yield too, so call them from a callback or inside `task.spawn`.
+
+### Saving configs in a DataStore
+
+A LocalScript cannot use DataStores, so the client asks the server through a RemoteEvent. The folder `examples` has both sides:
+
+| File | Where it goes |
+|---|---|
+| `examples/ConfigStore.server.lua` | A **Script** in `ServerScriptService`. It creates the RemoteEvent `NimbusConfig` and owns the DataStore. |
+| `examples/RemoteConfigStore.lua` | A **ModuleScript** named `RemoteConfigStore` in `ReplicatedStorage`. It returns a function that makes a config store. |
+
+Then, in your LocalScript:
+
+```lua
+local createRemoteConfigStore = require(ReplicatedStorage:WaitForChild("RemoteConfigStore"))
+
+local UI = Library.new({ Title = "My Game" })
+UI:SetConfigStore(createRemoteConfigStore())
+
+section:ConfigManager() -- now lists the configs in the DataStore
+```
+
+The request goes like this:
+
+1. The client fires `NimbusConfig` with a request number, an action (`"Save"`, `"Load"`, `"List"` or `"Delete"`), a name and, for `"Save"`, the JSON string.
+2. The server checks the request and answers on the same RemoteEvent with the request number, `true` or `false`, and the result.
+
+The server never trusts the client. The example server does these checks, and your own version should keep them:
+
+- **Types**: the request number must be a number, and the action and the name must be strings. The action must be one of the four known actions.
+- **Name**: 1 to 32 letters, digits, spaces, `-` or `_`.
+- **Size**: at most 16,000 characters in a config, 300 settings in a config and 10 configs for each player.
+- **Content**: the JSON must parse. Every value must be a boolean, a finite number, a short string, or a small table of those. The server saves its own re-encoded copy, not the string the client sent.
+- **Rate**: each player can send a burst of 6 requests, then 1 request each second.
+- **DataStore use**: the server reads a player's configs once when the player joins. It writes them a short time after a change and when the player leaves, with retries. If the read failed, it does not write, so an outage cannot replace saved configs with an empty list.
+
+Configs hold menu settings only. Do not read them on the server to decide anything about gameplay, because a player can put any value in a config.
+
+In Studio, turn on **Enable Studio Access to API Services** (Game Settings > Security) to test DataStores.

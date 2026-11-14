@@ -277,27 +277,26 @@ end
 
 local configs = settings:Section("Configs", "Right")
 
-configs:Button({
-	Name = "Save settings",
-	Callback = function()
-		local ok = UI:SaveConfig("demo")
-		UI:Notify({
-			Title = ok and "Saved" or "Not saved",
-			Text = ok and "Settings saved as \"demo\"." or "Could not save the settings.",
-			Type = ok and "Success" or "Error",
-		})
+-- A dropdown that lists the saved configs, a name box, and Save / Load / Delete
+-- buttons. Type a name and press Save; pick a config in the list to load it.
+--
+-- Configs last until you leave the game. To keep them in a DataStore, set up
+-- examples/ConfigStore.server.lua and examples/RemoteConfigStore.lua, then add:
+--     UI:SetConfigStore(require(ReplicatedStorage.RemoteConfigStore)())
+configs:ConfigManager({
+	Default = "demo",
+	Callback = function(action, name, ok)
+		print("Config", action, name, ok)
 	end,
 })
 
+-- The same things from code.
 configs:Button({
-	Name = "Load settings",
+	Name = "Quick save (code)",
+	Tooltip = "Calls UI:SaveConfig(\"quick\")",
 	Callback = function()
-		local ok = UI:LoadConfig("demo")
-		UI:Notify({
-			Title = ok and "Loaded" or "Nothing to load",
-			Text = ok and "Settings loaded from \"demo\"." or "Save the settings first.",
-			Type = ok and "Success" or "Warning",
-		})
+		local ok = UI:SaveConfig("quick")
+		print("Saved:", ok, "- configs:", table.concat(UI:ListConfigs(), ", "))
 	end,
 })
 

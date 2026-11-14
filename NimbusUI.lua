@@ -6,7 +6,7 @@
 
 	API overview
 		local UI = Library.new({ Title, Subtitle, Size, Accent, ToggleKey, NotifyPosition, ConfigFolder,
-		                         MobileButton, TouchMode })
+		                         MobileButton, TouchMode, ConfigStore })
 		local tab = UI:Tab("Name")
 		local section = tab:Section("Name", "Left" | "Right")
 
@@ -28,7 +28,9 @@
 
 		UI:Notify { Title, Text, Duration, Type = "Info"|"Success"|"Warning"|"Error" }
 		UI:SetAccent(Color3)   UI:SetOpen(bool)   UI:Destroy()
-		UI:SaveConfig(name)    UI:LoadConfig(name)
+		UI:SaveConfig(name)    UI:LoadConfig(name)    UI:DeleteConfig(name)    UI:ListConfigs() -> { name }
+		UI:SetConfigStore { Save(name, json), Load(name), List(), Delete(name) }   (or the ConfigStore option)
+		section:ConfigManager { Name, Default, Notify, DependsOn, Callback(action, name, ok) }
 		UI:ExportConfig() -> json string    UI:ApplyConfig(json)
 ]]
 
@@ -45,6 +47,7 @@ local env = getfenv() :: { [string]: any }
 local gethui = env.gethui
 local writefile, readfile = env.writefile, env.readfile
 local isfolder, makefolder = env.isfolder, env.makefolder
+local listfiles, delfile = env.listfiles, env.delfile
 
 local Library = {}
 Library.__index = Library
@@ -210,6 +213,11 @@ local function getGuiParent()
 	return player and player:WaitForChild("PlayerGui")
 end
 
+-- Config names: 1 to 32 letters, digits, spaces, hyphens or underscores.
+local function isValidConfigName(name)
+	return type(name) == "string" and #name >= 1 and #name <= 32 and string.match(name, "^[%w _%-]+$") ~= nil
+end
+
 local function hasFileSystem()
 	return typeof(writefile) == "function" and typeof(readfile) == "function"
 end
@@ -293,7 +301,8 @@ function Library.new(options)
 	self._accentHooks = {}
 	self._keybinds = {}
 	self._tabs = {}
-	self._memoryConfigs = {}
+	self._configManagers = {}
+	self._store = nil
 	self._notifications = {}
 	self._notifyCount = 0
 	self._activeDrag = nil
@@ -450,6 +459,8 @@ function Library.new(options)
 	local notifyLayout = addList(self._notifyHolder, 6)
 	notifyLayout.VerticalAlignment = onTop and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Bottom
 	notifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+
+	self:SetConfigStore(options.ConfigStore)
 
 	-- Global input --------------------------------------------------------
 	self:_connect(UserInputService.InputBegan, function(input, gameProcessed)
@@ -889,7 +900,12 @@ function Library:ExportConfig()
 	return HttpService:JSONEncode(data)
 end
 
+-- Applies a JSON config. Unknown flags are skipped, and a value that an
+-- element cannot use is ignored, so a damaged config cannot break the menu.
 function Library:ApplyConfig(json)
+	if type(json) ~= "string" then
+		return false
+	end
 	local ok, data = pcall(HttpService.JSONDecode, HttpService, json)
 	if not ok or type(data) ~= "table" then
 		return false
@@ -897,45 +913,167 @@ function Library:ApplyConfig(json)
 	for flag, raw in pairs(data) do
 		local setter = self._setters[flag]
 		if setter then
-			setter(deserialize(raw))
+			local applied, err = pcall(setter, deserialize(raw))
+			if not applied then
+				warn("[NimbusUI] could not apply flag '" .. tostring(flag) .. "': " .. tostring(err))
+			end
 		end
 	end
 	return true
 end
 
--- Uses writefile/readfile when the environment has them; otherwise keeps
--- configs in memory for this session (use ExportConfig to store elsewhere).
+-- Config stores ----------------------------------------------------------
+-- A config store is a table of four functions. They may yield, so a store can
+-- talk to the server (see examples/ConfigStore.client.lua):
+--   Save(name, json) -> boolean      Load(name) -> json string or nil
+--   List() -> { name, ... }          Delete(name) -> boolean
+
+-- Keeps configs in memory until the player leaves. This is the default.
+local function newMemoryStore()
+	local configs = {}
+	return {
+		Save = function(name, json)
+			configs[name] = json
+			return true
+		end,
+		Load = function(name)
+			return configs[name]
+		end,
+		List = function()
+			local names = {}
+			for name in pairs(configs) do
+				table.insert(names, name)
+			end
+			return names
+		end,
+		Delete = function(name)
+			local existed = configs[name] ~= nil
+			configs[name] = nil
+			return existed
+		end,
+	}
+end
+
+-- Keeps configs as files, in environments that have file functions.
+local function newFileStore(folder)
+	local saved = {} -- names saved this session, for environments without listfiles
+	local function path(name)
+		return folder .. "/" .. name .. ".json"
+	end
+	return {
+		Save = function(name, json)
+			if typeof(isfolder) == "function" and typeof(makefolder) == "function" and not isfolder(folder) then
+				makefolder(folder)
+			end
+			writefile(path(name), json)
+			saved[name] = true
+			return true
+		end,
+		Load = function(name)
+			return readfile(path(name))
+		end,
+		List = function()
+			local names = {}
+			if typeof(listfiles) == "function" then
+				for _, file in ipairs(listfiles(folder)) do
+					local name = string.match(file, "([^/\\]+)%.json$")
+					if name then
+						table.insert(names, name)
+					end
+				end
+			else
+				for name in pairs(saved) do
+					table.insert(names, name)
+				end
+			end
+			return names
+		end,
+		Delete = function(name)
+			saved[name] = nil
+			if typeof(delfile) == "function" then
+				delfile(path(name))
+				return true
+			end
+			return false
+		end,
+	}
+end
+
+-- Replaces where configs are kept. Pass nil to go back to the default store.
+function Library:SetConfigStore(store)
+	if store == nil then
+		store = hasFileSystem() and newFileStore(self.ConfigFolder) or newMemoryStore()
+	end
+	for _, name in ipairs({ "Save", "Load", "List", "Delete" }) do
+		if type(store) ~= "table" or type(store[name]) ~= "function" then
+			error("[NimbusUI] a config store needs the function " .. name, 2)
+		end
+	end
+	self._store = store
+	self:_configsChanged()
+end
+
+-- Tells every config manager to read the list of configs again.
+function Library:_configsChanged(selectName)
+	for _, manager in ipairs(self._configManagers) do
+		manager:Refresh(selectName)
+	end
+end
+
+-- Saves the current settings under `name`. Returns true when it worked.
+-- Yields if the config store yields.
 function Library:SaveConfig(name)
 	name = name or "default"
-	local json = self:ExportConfig()
-	if hasFileSystem() then
-		local ok = pcall(function()
-			if typeof(isfolder) == "function" and typeof(makefolder) == "function" and not isfolder(self.ConfigFolder) then
-				makefolder(self.ConfigFolder)
-			end
-			writefile(self.ConfigFolder .. "/" .. name .. ".json", json)
-		end)
-		return ok
+	if not isValidConfigName(name) then
+		return false
 	end
-	self._memoryConfigs[name] = json
-	return true
+	local ok, result = pcall(self._store.Save, name, self:ExportConfig())
+	local saved = ok and result ~= false and result ~= nil
+	if saved then
+		self:_configsChanged(name)
+	end
+	return saved
 end
 
+-- Loads the settings saved under `name`. Returns true when it worked.
 function Library:LoadConfig(name)
 	name = name or "default"
-	local json
-	if hasFileSystem() then
-		local ok, result = pcall(readfile, self.ConfigFolder .. "/" .. name .. ".json")
-		if ok then
-			json = result
-		end
-	else
-		json = self._memoryConfigs[name]
+	if not isValidConfigName(name) then
+		return false
 	end
-	if not json then
+	local ok, json = pcall(self._store.Load, name)
+	if not ok or type(json) ~= "string" then
 		return false
 	end
 	return self:ApplyConfig(json)
+end
+
+-- Returns the names of the saved configs, sorted.
+function Library:ListConfigs()
+	local ok, result = pcall(self._store.List)
+	local names = {}
+	if ok and type(result) == "table" then
+		for _, name in ipairs(result) do
+			if isValidConfigName(name) and not table.find(names, name) then
+				table.insert(names, name)
+			end
+		end
+	end
+	table.sort(names)
+	return names
+end
+
+-- Deletes the config saved under `name`. Returns true when it worked.
+function Library:DeleteConfig(name)
+	if not isValidConfigName(name) then
+		return false
+	end
+	local ok, result = pcall(self._store.Delete, name)
+	local deleted = ok and result ~= false and result ~= nil
+	if deleted then
+		self:_configsChanged()
+	end
+	return deleted
 end
 
 ------------------------------------------------------------------------
@@ -1611,7 +1749,8 @@ local function buildKeybind(lib, parent, opts, props)
 
 	render()
 	lib:_registerFlag(opts.Flag, key or false, function(v)
-		bind:Set(v or nil)
+		-- configs can hold anything; only accept a key or mouse button
+		bind:Set(typeof(v) == "EnumItem" and v or nil)
 	end)
 	return bind, button
 end
@@ -2146,6 +2285,141 @@ function Section:Label(text, opts)
 			label.Text = newText
 		end,
 	}, label, opts)
+end
+
+-- Config manager -------------------------------------------------------
+-- A dropdown that lists the saved configs, a name box, and Save / Load /
+-- Delete / Refresh buttons. Options: { Name, Default, Notify, DependsOn,
+-- Callback(action, name, ok) } where action is "Save", "Load" or "Delete".
+function Section:ConfigManager(opts)
+	opts = opts or {}
+	local lib = self.Library
+	local manager = {}
+	local busy = false
+	local visible = true
+
+	local function notify(title, text, kind)
+		if opts.Notify ~= false then
+			lib:Notify({ Title = title, Text = text, Type = kind })
+		end
+	end
+
+	local nameBox
+	local list = self:Dropdown({
+		Name = opts.Name or "Saved configs",
+		Options = {},
+		Tooltip = opts.Tooltip,
+		DependsOn = opts.DependsOn,
+		Callback = function(name)
+			if name and nameBox then
+				nameBox:Set(name, true)
+			end
+		end,
+	})
+	nameBox = self:Textbox({
+		Name = "Config name",
+		Placeholder = "Type a name...",
+		Default = opts.Default or "",
+		DependsOn = opts.DependsOn,
+	})
+
+	-- Reads the list of configs again. Selects `selectName` when it exists.
+	local refreshId = 0
+	function manager:Refresh(selectName)
+		refreshId += 1
+		local id = refreshId
+		task.spawn(function()
+			local names = lib:ListConfigs() -- may yield
+			if id ~= refreshId then
+				return -- a newer refresh has started
+			end
+			list:Refresh(names)
+			if selectName and table.find(names, selectName) then
+				list:Set(selectName, true)
+			end
+		end)
+	end
+
+	local messages = {
+		Save = { "Saved", "Saved the config \"%s\".", "Could not save the config \"%s\"." },
+		Load = { "Loaded", "Loaded the config \"%s\".", "Could not load the config \"%s\"." },
+		Delete = { "Deleted", "Deleted the config \"%s\".", "Could not delete the config \"%s\"." },
+	}
+	local function run(action, method)
+		if busy then
+			return
+		end
+		local name = string.match(nameBox:Get(), "^%s*(.-)%s*$")
+		if not isValidConfigName(name) then
+			notify("Config name", "Use 1 to 32 letters, digits, spaces, - or _.", "Warning")
+			return
+		end
+		busy = true
+		task.spawn(function()
+			local ok = method(lib, name) -- may yield
+			busy = false
+			local message = messages[action]
+			if ok then
+				notify(message[1], string.format(message[2], name), "Success")
+			else
+				notify("Config", string.format(message[3], name), "Error")
+			end
+			safeCall(opts.Callback, action, name, ok)
+		end)
+	end
+
+	local buttons = {
+		self:Button({
+			Name = "Save",
+			DependsOn = opts.DependsOn,
+			Callback = function()
+				run("Save", lib.SaveConfig)
+			end,
+		}),
+		self:Button({
+			Name = "Load",
+			DependsOn = opts.DependsOn,
+			Callback = function()
+				run("Load", lib.LoadConfig)
+			end,
+		}),
+		self:Button({
+			Name = "Delete",
+			DependsOn = opts.DependsOn,
+			Callback = function()
+				run("Delete", lib.DeleteConfig)
+			end,
+		}),
+		self:Button({
+			Name = "Refresh list",
+			DependsOn = opts.DependsOn,
+			Callback = function()
+				manager:Refresh()
+			end,
+		}),
+	}
+
+	manager.Dropdown = list
+	manager.NameBox = nameBox
+	-- The name in the box.
+	function manager:Get()
+		return nameBox:Get()
+	end
+	function manager:SetVisible(state)
+		visible = state ~= false
+		list:SetVisible(visible)
+		nameBox:SetVisible(visible)
+		for _, button in ipairs(buttons) do
+			button:SetVisible(visible)
+		end
+	end
+	function manager:IsVisible()
+		return visible and list:IsVisible()
+	end
+
+	table.insert(lib._configManagers, manager)
+	manager:Refresh()
+	return manager
 end
 
 return Library
