@@ -29,6 +29,7 @@
 		UI:Notify { Title, Text, Duration, Persistent, Type = "Info"|"Success"|"Warning"|"Error" }   -> :Close()
 		UI:SetAccent(Color3)   UI:SetOpen(bool)   UI:Destroy()
 		UI:SetTheme { Background, Panel, Section, Element, Hover, Border, Text, SubText, Accent }
+		section:ThemeManager { Keys, FlagPrefix, ResetName, DependsOn, Callback(key, color) }   -> :Reset()
 		UI:SaveConfig(name)    UI:LoadConfig(name)    UI:DeleteConfig(name)    UI:ListConfigs() -> { name }
 		UI:SetConfigStore { Save(name, json), Load(name), List(), Delete(name) }   (or the ConfigStore option)
 		section:ConfigManager { Name, Default, Notify, DependsOn, Callback(action, name, ok) }
@@ -77,7 +78,7 @@ local DEFAULT_THEME = {
 
 Library.DefaultTheme = table.freeze(table.clone(DEFAULT_THEME))
 -- Print this to check which copy of the library a game is running.
-Library.Version = "1.2.0"
+Library.Version = "1.3.0"
 
 local THEME_COLOR_KEYS = { "Background", "Panel", "Section", "Element", "Hover", "Border", "Text", "SubText" }
 
@@ -401,6 +402,7 @@ function Library.new(options)
 		end,
 	})
 	self._configManagers = {}
+	self._themeManagers = {}
 	self._store = nil
 	self._notifications = {}
 	self._notifyCount = 0
@@ -936,6 +938,15 @@ function Library:SetTheme(changes)
 
 	if typeof(changes.Accent) == "Color3" then
 		self:SetAccent(changes.Accent)
+	else
+		self:_syncThemeManagers()
+	end
+end
+
+-- Makes the pickers of every theme manager show the current theme.
+function Library:_syncThemeManagers()
+	for _, manager in ipairs(self._themeManagers) do
+		manager:Sync()
 	end
 end
 
@@ -945,6 +956,7 @@ function Library:SetAccent(color)
 		pcall(hook, color)
 	end
 	self:_repaint({ Accent = true })
+	self:_syncThemeManagers()
 end
 
 function Library:Destroy()
@@ -2645,6 +2657,89 @@ function Section:ConfigManager(opts)
 
 	table.insert(lib._configManagers, manager)
 	manager:Refresh()
+	return manager
+end
+
+-- Theme manager --------------------------------------------------------
+-- One colour picker for each theme colour, plus a reset button. Every picker
+-- calls SetTheme, so the menu follows the pickers while they are dragged.
+-- Options: { Keys, FlagPrefix, ResetName, DependsOn, Callback(key, color) }
+--   Keys        which colours to show, default: all of them
+--   FlagPrefix  flags are FlagPrefix .. key (default "theme_"), so configs save
+--               the theme; pass false for no flags
+function Section:ThemeManager(opts)
+	opts = opts or {}
+	local lib = self.Library
+	local keys = opts.Keys or { "Accent", "Background", "Panel", "Section", "Element", "Hover", "Border", "Text", "SubText" }
+	local prefix = opts.FlagPrefix
+	if prefix == nil then
+		prefix = "theme_"
+	end
+
+	local manager = { Pickers = {} }
+	local startColors = {} -- the colours Reset goes back to
+	local elements = {}
+	local visible = true
+
+	for _, key in ipairs(keys) do
+		local start = lib.Theme[key]
+		if typeof(start) == "Color3" and (key == "Accent" or table.find(THEME_COLOR_KEYS, key)) then
+			startColors[key] = start
+			local picker = self:ColorPicker({
+				Name = key,
+				Default = start,
+				Flag = prefix and (prefix .. key) or nil,
+				DependsOn = opts.DependsOn,
+				Callback = function(color)
+					lib:SetTheme({ [key] = color })
+					safeCall(opts.Callback, key, color)
+				end,
+			})
+			manager.Pickers[key] = picker
+			table.insert(elements, picker)
+		else
+			warn("[NimbusUI] ThemeManager: unknown theme colour '" .. tostring(key) .. "'")
+		end
+	end
+
+	-- Puts every colour back to what it was when the manager was created.
+	function manager:Reset()
+		lib:SetTheme(startColors)
+	end
+
+	-- Makes the pickers show the current theme. SetTheme and SetAccent call
+	-- this, so the pickers stay right when the theme is changed from code.
+	function manager:Sync()
+		for key, picker in pairs(manager.Pickers) do
+			local current = lib.Theme[key]
+			if picker:Get():ToHex() ~= current:ToHex() then
+				picker:Set(current, true)
+			end
+		end
+	end
+
+	table.insert(
+		elements,
+		self:Button({
+			Name = opts.ResetName or "Reset theme",
+			DependsOn = opts.DependsOn,
+			Callback = function()
+				manager:Reset()
+			end,
+		})
+	)
+
+	function manager:SetVisible(state)
+		visible = state ~= false
+		for _, element in ipairs(elements) do
+			element:SetVisible(visible)
+		end
+	end
+	function manager:IsVisible()
+		return visible and elements[1]:IsVisible()
+	end
+
+	table.insert(lib._themeManagers, manager)
 	return manager
 end
 

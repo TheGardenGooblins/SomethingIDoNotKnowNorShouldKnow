@@ -247,16 +247,14 @@ local settings = UI:Tab("Settings")
 
 local appearance = settings:Section("Appearance", "Left")
 
-appearance:ColorPicker({
-	Name = "Accent colour",
-	Flag = "accent",
-	Default = UI.Theme.Accent,
-	Callback = function(color)
-		UI:SetAccent(color)
-	end,
+-- One picker for each theme colour and a reset button. The pickers call
+-- UI:SetTheme for you, and they follow the theme when it changes from code.
+appearance:ThemeManager({
+	Keys = { "Accent", "Background", "Panel", "Section", "Text" },
+	ResetName = "Reset UI theme",
 })
 
--- SetTheme changes the other colours while the menu is open.
+-- SetTheme changes many colours at once, for example for preset themes.
 appearance:Dropdown({
 	Name = "Theme",
 	Flag = "theme",
@@ -286,10 +284,7 @@ appearance:Dropdown({
 				SubText = Color3.fromRGB(96, 98, 112),
 			})
 		else
-			-- the accent is left out so the accent picker above keeps its colour
-			local defaults = table.clone(Library.DefaultTheme)
-			defaults.Accent = nil
-			UI:SetTheme(defaults)
+			UI:SetTheme(Library.DefaultTheme)
 		end
 	end,
 })

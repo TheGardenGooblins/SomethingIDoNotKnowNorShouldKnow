@@ -35,6 +35,7 @@ UI:Notify({ Title = "Hello", Text = "Menu loaded", Type = "Success" })
 | `Textbox` | `Name, Default, Placeholder, Flag, Callback(text, enterPressed)` |
 | `Button` | `Name, Tooltip, Callback()` |
 | `Label(text)` | — (or `Label({ Text, DependsOn })`) |
+| `ThemeManager` | `Keys, FlagPrefix, ResetName, DependsOn, Callback(key, color)`; see [Themes](#themes) |
 | `ConfigManager` | `Name, Default, Notify, DependsOn, Callback(action, name, ok)`; see [Configs](#configs) |
 
 Click the value of a slider to type an exact number. The slider keeps the number inside `Min` and `Max` and rounds it to `Step`.
@@ -142,6 +143,25 @@ UI:SetTheme(Library.DefaultTheme) -- back to the default colours
 ```
 
 The colour names are `Background`, `Panel`, `Section`, `Element`, `Hover`, `Border`, `Text`, `SubText` and `Accent`. To start with other colours, pass the same table as `Theme` to `Library.new`.
+
+### Theme manager
+
+`section:ThemeManager()` adds one colour picker for each theme colour and a reset button. Use it instead of writing your own theme code:
+
+```lua
+local manager = section:ThemeManager({
+	Keys = { "Accent", "Background", "Panel", "Section" }, -- default: every colour
+	ResetName = "Reset UI theme",
+	FlagPrefix = "theme_",   -- flags are "theme_Accent", ...; pass false for no flags
+	Callback = function(key, color) end,
+})
+
+manager:Reset() -- back to the colours the menu had when the manager was created
+```
+
+The menu follows the pickers while you drag them. The pickers also follow the theme when your code calls `SetTheme` or `SetAccent`. Because the pickers have flags, configs save and load the theme.
+
+Do not recolour the menu's frames yourself, for example with a loop that looks for frames of a known colour. That stops working after the first change, because the frames no longer have the colour the loop looks for. Use `SetTheme` or the theme manager.
 
 Two theme names can share one colour, for example the same colour for `Background`, `Panel` and `Section` in a flat theme. The library records which name each object uses, so a later `SetTheme` still changes the right objects.
 
