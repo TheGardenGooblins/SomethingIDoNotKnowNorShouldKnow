@@ -1182,19 +1182,28 @@ function Section:Slider(opts)
 		LayoutOrder = self:_next(),
 		Parent = self.Content,
 	})
+	local valueWidth = lib.Touch and 96 or 72
 	makeLabel(theme, {
-		Size = UDim2.new(1, 0, 0, 14),
+		Size = UDim2.new(1, -(valueWidth + 4), 0, 14),
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		Text = opts.Name or "Slider",
 		Parent = holder,
 	})
-	local valueLabel = makeLabel(theme, {
-		Size = UDim2.new(1, 0, 0, 14),
-		TextColor3 = theme.SubText,
+	-- The value is a text box: click it to type an exact number.
+	local valueBox = create("TextBox", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.fromScale(1, 0),
+		Size = UDim2.fromOffset(valueWidth, 16),
+		Font = theme.Font,
 		TextSize = 12,
+		TextColor3 = theme.SubText,
 		TextXAlignment = Enum.TextXAlignment.Right,
+		ClearTextOnFocus = false,
 		Text = "",
 		Parent = holder,
 	})
+	local editing = false
 	-- `hit` is the invisible drag area (taller on touch); `bar` is the track.
 	local hit = create("TextButton", {
 		AutoButtonColor = false,
@@ -1224,7 +1233,9 @@ function Section:Slider(opts)
 	local function render()
 		local pct = (max == min) and 0 or (value - min) / (max - min)
 		fill.Size = UDim2.fromScale(pct, 1)
-		valueLabel.Text = string.format("%." .. decimals .. "f", value) .. suffix
+		if not editing then
+			valueBox.Text = string.format("%." .. decimals .. "f", value) .. suffix
+		end
 	end
 
 	local slider = {}
@@ -1250,6 +1261,27 @@ function Section:Slider(opts)
 	hit.InputBegan:Connect(function(input)
 		if isPointer(input) then
 			lib:_beginDrag(fromInput, input)
+		end
+	end)
+
+	valueBox.Focused:Connect(function()
+		editing = true
+		valueBox.TextColor3 = theme.Text
+		-- show the bare number, selected, so typing replaces it
+		valueBox.Text = string.format("%." .. decimals .. "f", value)
+		valueBox.CursorPosition = #valueBox.Text + 1
+		valueBox.SelectionStart = 1
+	end)
+	valueBox.FocusLost:Connect(function()
+		editing = false
+		valueBox.TextColor3 = theme.SubText
+		-- accept "42", "42.5", "42,5" and "42%"; anything else is ignored
+		local text = string.gsub(valueBox.Text, ",", ".")
+		local typed = tonumber(string.match(text, "^%s*(%-?%d*%.?%d+)"))
+		if typed and round(typed) ~= value then
+			slider:Set(typed) -- clamps to Min/Max and snaps to Step
+		else
+			render()
 		end
 	end)
 

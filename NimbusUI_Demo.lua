@@ -45,7 +45,7 @@ general:Slider({
 	Max = 100,
 	Default = 50,
 	Suffix = "%",
-	Tooltip = "Drag to change the volume",
+	Tooltip = "Drag, or click the number to type an exact value",
 	Callback = function(value)
 		print("Volume:", value)
 	end,
