@@ -196,6 +196,17 @@ local function safeCall(fn, ...)
 	end)
 end
 
+-- Returns a copy of `list` without repeated values.
+local function withoutDuplicates(list)
+	local out = {}
+	for _, item in ipairs(list) do
+		if not table.find(out, item) then
+			table.insert(out, item)
+		end
+	end
+	return out
+end
+
 local function decimalsOf(step)
 	local s = tostring(step)
 	local dot = string.find(s, ".", 1, true)
@@ -1438,7 +1449,7 @@ function Section:Dropdown(opts)
 	local theme = lib.Theme
 	local m = lib._m
 	local multi = opts.Multi == true
-	local options = opts.Options or {}
+	local options = withoutDuplicates(opts.Options or {})
 	local value = multi and {} or nil
 	local open = false
 
@@ -1613,10 +1624,22 @@ function Section:Dropdown(opts)
 	function dropdown:Get()
 		return multi and table.clone(value) or value
 	end
+	-- Replaces the options. A selection that is still in the new list is kept;
+	-- one that is not is dropped, and Callback runs because the value changed.
 	function dropdown:Refresh(newOptions)
-		options = newOptions or {}
+		local before = value
+		options = withoutDuplicates(newOptions or {})
 		build()
 		dropdown:Set(value, true)
+		local changed
+		if multi then
+			changed = #value ~= #before
+		else
+			changed = value ~= before
+		end
+		if changed then
+			safeCall(opts.Callback, dropdown:Get())
+		end
 	end
 
 	lib:_onClick(header, function()

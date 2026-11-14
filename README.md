@@ -39,6 +39,8 @@ UI:Notify({ Title = "Hello", Text = "Menu loaded", Type = "Success" })
 
 Click the value of a slider to type an exact number. The slider keeps the number inside `Min` and `Max` and rounds it to `Step`.
 
+`dropdown:Refresh(options)` replaces the options. It keeps the selection if that option is still in the list. If it is not, the selection is cleared and `Callback` runs with the new value.
+
 A dropdown shows at most `MaxVisible` options (8 by default) and scrolls when it has more.
 
 Every element returns an object with `:Set(value, silent)` and `:Get()`. Buttons and labels use `:SetText` and `:Set` instead. Every element also takes `DependsOn` and has `:SetVisible(bool)`; see [Showing and hiding elements](#showing-and-hiding-elements).
