@@ -31,6 +31,14 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
+-- Optional functions that only some environments define; they are nil in a
+-- normal Roblox game. Reading them from the environment table keeps the script
+-- analyzer from reporting them as unknown globals.
+local env = getfenv() :: { [string]: any }
+local gethui = env.gethui
+local writefile, readfile = env.writefile, env.readfile
+local isfolder, makefolder = env.isfolder, env.makefolder
+
 local Library = {}
 Library.__index = Library
 
@@ -151,11 +159,11 @@ local function decimalsOf(step)
 end
 
 local function getGuiParent()
-	local ok, hui = pcall(function()
-		return gethui and gethui()
-	end)
-	if ok and hui then
-		return hui
+	if typeof(gethui) == "function" then
+		local ok, hui = pcall(gethui)
+		if ok and hui then
+			return hui
+		end
 	end
 	local player = Players.LocalPlayer
 	return player and player:WaitForChild("PlayerGui")
@@ -170,7 +178,9 @@ local function serialize(value)
 	if kind == "Color3" then
 		return { __type = "Color3", hex = value:ToHex() }
 	elseif kind == "EnumItem" then
-		return { __type = "EnumItem", enum = tostring(value.EnumType), name = value.Name }
+		-- tostring(EnumItem) is always "Enum.<EnumName>.<ItemName>"
+		local enumName = string.match(tostring(value), "^Enum%.([%w_]+)%.")
+		return { __type = "EnumItem", enum = enumName, name = value.Name }
 	elseif kind == "table" then
 		local out = {}
 		for k, v in pairs(value) do
@@ -190,7 +200,8 @@ local function deserialize(value)
 		return ok and color or nil
 	elseif value.__type == "EnumItem" then
 		local ok, item = pcall(function()
-			return Enum[value.enum][value.name]
+			local enumName = string.gsub(tostring(value.enum), "^Enum%.", "")
+			return (Enum :: any)[enumName][value.name]
 		end)
 		return ok and item or nil
 	end
@@ -645,7 +656,7 @@ function Library:SaveConfig(name)
 	local json = self:ExportConfig()
 	if hasFileSystem() then
 		local ok = pcall(function()
-			if typeof(isfolder) == "function" and not isfolder(self.ConfigFolder) then
+			if typeof(isfolder) == "function" and typeof(makefolder) == "function" and not isfolder(self.ConfigFolder) then
 				makefolder(self.ConfigFolder)
 			end
 			writefile(self.ConfigFolder .. "/" .. name .. ".json", json)
@@ -908,11 +919,14 @@ function Section:Slider(opts)
 	local theme = lib.Theme
 	local min, max = opts.Min or 0, opts.Max or 100
 	local step = opts.Step or 1
-	local decimals = decimalsOf(step)
+	local decimals = math.max(decimalsOf(step), decimalsOf(min))
 	local suffix = opts.Suffix or ""
 
+	local scale = 10 ^ decimals
 	local function round(v)
-		return math.clamp(min + math.floor((v - min) / step + 0.5) * step, min, max)
+		local snapped = math.clamp(min + math.floor((v - min) / step + 0.5) * step, min, max)
+		-- remove floating point noise such as 0.30000000000000004
+		return math.floor(snapped * scale + 0.5) / scale
 	end
 	local value = round(opts.Default or min)
 
