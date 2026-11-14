@@ -81,10 +81,10 @@ Library.DefaultTheme = table.freeze(table.clone(DEFAULT_THEME))
 -- most likely first.
 local THEME_KEYS_FOR = {
 	BackgroundColor3 = { "Background", "Panel", "Section", "Element", "Hover", "Border" },
-	TextColor3 = { "Text", "SubText" },
+	TextColor3 = { "Text", "SubText", "Accent" },
 	PlaceholderColor3 = { "SubText" },
 	ScrollBarImageColor3 = { "Border", "SubText" },
-	Color = { "Border" },
+	Color = { "Border", "Accent" },
 }
 local THEMED_PROPERTIES = {
 	Frame = { "BackgroundColor3" },
@@ -160,14 +160,31 @@ local function create(className, props, children)
 	return inst
 end
 
+-- The tween that is running on each object, so a theme change can stop it.
+local activeTweens = setmetatable({}, { __mode = "k" })
+
 local function tween(inst, duration, props, style)
 	local t = TweenService:Create(
 		inst,
 		TweenInfo.new(duration, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		props
 	)
+	local record = { Tween = t, Goals = props }
+	activeTweens[inst] = record
+	t.Completed:Connect(function()
+		if activeTweens[inst] == record then
+			activeTweens[inst] = nil
+		end
+	end)
 	t:Play()
 	return t
+end
+
+-- True when two colours look the same. A colour that a tween has just
+-- finished on can differ from its target by a rounding error, so an exact
+-- comparison is not safe. The tolerance is half of one 0-255 step.
+local function sameColor(a, b)
+	return math.abs(a.R - b.R) < 0.002 and math.abs(a.G - b.G) < 0.002 and math.abs(a.B - b.B) < 0.002
 end
 
 local function addStroke(parent, color)
@@ -826,6 +843,52 @@ function Library:SetOpen(open)
 	end
 end
 
+-- Moves every object that shows an old theme colour to the new colour of the
+-- same theme key. `old` maps theme keys to the colours they had before.
+-- Elements read the theme table when their state changes, so later changes
+-- use the new colours without help.
+function Library:_recolor(old)
+	local theme = self.Theme
+
+	local function keyOf(property, color)
+		if typeof(color) ~= "Color3" then
+			return nil
+		end
+		for _, key in ipairs(THEME_KEYS_FOR[property]) do
+			if old[key] and sameColor(color, old[key]) then
+				return key
+			end
+		end
+		return nil
+	end
+
+	for _, inst in ipairs(self.Gui:GetDescendants()) do
+		local properties = THEMED_PROPERTIES[inst.ClassName]
+		if properties and not self._fixedColors[inst] then
+			-- A colour tween that is still running (a hover fade, a click
+			-- flash) would finish on the old colour. Stop it and treat the
+			-- colour it was heading for as the current one.
+			local running = activeTweens[inst]
+			local goals = running and running.Goals or nil
+			for _, property in ipairs(properties) do
+				local goal = goals and goals[property]
+				local current = inst[property]
+				if typeof(goal) == "Color3" then
+					running.Tween:Cancel()
+					activeTweens[inst] = nil
+					current = goal
+				end
+				local key = keyOf(property, current)
+				if key then
+					inst[property] = theme[key]
+				elseif typeof(goal) == "Color3" then
+					inst[property] = goal
+				end
+			end
+		end
+	end
+end
+
 -- Changes theme colours while the menu is open. `changes` is a table with any
 -- of: Background, Panel, Section, Element, Hover, Border, Text, SubText, Accent.
 --   UI:SetTheme({ Background = Color3.fromRGB(12, 16, 28), Text = Color3.new(1, 1, 1) })
@@ -837,31 +900,12 @@ function Library:SetTheme(changes)
 	local theme = self.Theme
 	local old = {}
 	for _, key in ipairs(THEME_COLOR_KEYS) do
-		old[key] = theme[key]
 		if typeof(changes[key]) == "Color3" then
+			old[key] = theme[key]
 			theme[key] = changes[key]
 		end
 	end
-
-	-- Every themed object currently shows one of the old colours; move it to
-	-- the new colour of the same theme key. Elements read the theme table when
-	-- their state changes, so later changes use the new colours too.
-	for _, inst in ipairs(self.Gui:GetDescendants()) do
-		local properties = THEMED_PROPERTIES[inst.ClassName]
-		if properties and not self._fixedColors[inst] then
-			for _, property in ipairs(properties) do
-				local current = inst[property]
-				for _, key in ipairs(THEME_KEYS_FOR[property]) do
-					if current == old[key] then
-						if theme[key] ~= current then
-							inst[property] = theme[key]
-						end
-						break
-					end
-				end
-			end
-		end
-	end
+	self:_recolor(old)
 
 	if typeof(changes.Accent) == "Color3" then
 		self:SetAccent(changes.Accent)
@@ -869,10 +913,14 @@ function Library:SetTheme(changes)
 end
 
 function Library:SetAccent(color)
+	local old = { Accent = self.Theme.Accent }
 	self.Theme.Accent = color
 	for _, hook in ipairs(self._accentHooks) do
 		pcall(hook, color)
 	end
+	-- objects that only show the accent for a moment (a hovered toggle box, a
+	-- focused text box, an open dropdown) have no hook; recolour those too
+	self:_recolor(old)
 end
 
 function Library:Destroy()
@@ -2053,7 +2101,16 @@ local function buildColorPicker(lib, swatchParent, panelParent, opts, swatchProp
 		if typeof(c) ~= "Color3" then
 			return
 		end
-		h, s, v = c:ToHSV()
+		local newH, newS, newV = c:ToHSV()
+		-- grey and black have no hue of their own; keep the picker's hue (and
+		-- for black its saturation) so the cursors do not jump
+		if newV > 0 then
+			s = newS
+			if newS > 0 then
+				h = newH
+			end
+		end
+		v = newV
 		commit(silent)
 	end
 	function picker:Get()
