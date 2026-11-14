@@ -5,7 +5,8 @@
 	and require it from a LocalScript. See NimbusUI_Demo.lua for every element.
 
 	API overview
-		local UI = Library.new({ Title, Subtitle, Size, Accent, ToggleKey, NotifyPosition, ConfigFolder })
+		local UI = Library.new({ Title, Subtitle, Size, Accent, ToggleKey, NotifyPosition, ConfigFolder,
+		                         MobileButton, TouchMode })
 		local tab = UI:Tab("Name")
 		local section = tab:Section("Name", "Left" | "Right")
 
@@ -62,6 +63,40 @@ local DEFAULT_THEME = {
 	Font = Enum.Font.Gotham,
 	FontBold = Enum.Font.GothamBold,
 	TextSize = 13,
+}
+
+-- Element sizes in pixels. Touch devices get larger tap targets.
+local DESKTOP_METRICS = {
+	Row = 18, -- toggle / keybind / colour rows
+	Check = 12, -- toggle box
+	Button = 22,
+	Field = 20, -- dropdown header, text boxes
+	Option = 18, -- dropdown option rows
+	Tab = 26,
+	Bind = 16, -- keybind button height
+	BindWidth = 64,
+	SwatchW = 26,
+	SwatchH = 12,
+	Bar = 8, -- visible slider track
+	BarHit = 14, -- slider drag area
+	Hue = 14, -- hue strip width
+	Spacing = 6,
+}
+local TOUCH_METRICS = {
+	Row = 32,
+	Check = 18,
+	Button = 34,
+	Field = 32,
+	Option = 32,
+	Tab = 38,
+	Bind = 28,
+	BindWidth = 76,
+	SwatchW = 44,
+	SwatchH = 24,
+	Bar = 12,
+	BarHit = 32,
+	Hue = 28,
+	Spacing = 8,
 }
 
 local NOTIFY_COLORS = {
@@ -235,6 +270,19 @@ function Library.new(options)
 	self.MaxNotifications = options.MaxNotifications or 5
 	self.Open = true
 
+	-- Touch mode: larger tap targets and long-press tooltips. Detected from the
+	-- device unless TouchMode is given.
+	if options.TouchMode ~= nil then
+		self.Touch = options.TouchMode == true
+	else
+		self.Touch = UserInputService.TouchEnabled
+	end
+	self._m = self.Touch and TOUCH_METRICS or DESKTOP_METRICS
+	self._scrollers = {}
+	self._suppressUntil = 0
+	self._tipToken = nil
+	self._tipTouch = false
+
 	self._setters = {}
 	self._connections = {}
 	self._accentHooks = {}
@@ -345,6 +393,28 @@ function Library.new(options)
 		Parent = body,
 	})
 
+	-- Shrink the window when the screen is smaller than it (phones).
+	local windowScale = create("UIScale", { Parent = self.Main })
+	local function fitWindow()
+		local screen = self.Gui.AbsoluteSize
+		local size = self.Main.Size
+		if screen.X <= 0 or screen.Y <= 0 or size.X.Offset <= 0 or size.Y.Offset <= 0 then
+			return
+		end
+		windowScale.Scale = math.min(1, (screen.X - 16) / size.X.Offset, (screen.Y - 16) / size.Y.Offset)
+	end
+	fitWindow()
+	self:_connect(self.Gui:GetPropertyChangedSignal("AbsoluteSize"), fitWindow)
+
+	-- On-screen open/close button (on by default on touch devices).
+	local wantButton = options.MobileButton
+	if wantButton == nil then
+		wantButton = UserInputService.TouchEnabled
+	end
+	if wantButton then
+		self:_createMobileButton()
+	end
+
 	-- Tooltip -------------------------------------------------------------
 	self._tooltip = create("TextLabel", {
 		BackgroundColor3 = theme.Panel,
@@ -396,6 +466,10 @@ function Library.new(options)
 	self:_connect(UserInputService.InputEnded, function(input)
 		if isPointer(input) then
 			self._activeDrag = nil
+			self:_setScrollLock(false)
+		end
+		if input.UserInputType == Enum.UserInputType.Touch then
+			self:_endTouchTooltip()
 		end
 		for _, bind in ipairs(self._keybinds) do
 			bind.ended(input)
@@ -409,7 +483,7 @@ function Library.new(options)
 		if self._activeDrag then
 			self._activeDrag(input)
 		end
-		if self._tooltip.Visible then
+		if self._tooltip.Visible and not self._tipTouch then
 			self:_placeTooltip(input.Position.X, input.Position.Y)
 		end
 	end)
@@ -435,7 +509,88 @@ end
 
 function Library:_beginDrag(fn, input)
 	self._activeDrag = fn
+	-- stop the columns from scrolling while a slider or picker is dragged
+	self:_setScrollLock(true)
 	fn(input)
+end
+
+function Library:_setScrollLock(locked)
+	for _, scroller in ipairs(self._scrollers) do
+		scroller.ScrollingEnabled = not locked
+	end
+end
+
+-- Connects a click handler that is skipped when the press was a long-press
+-- used to read a tooltip.
+function Library:_onClick(button, fn)
+	button.MouseButton1Click:Connect(function()
+		if os.clock() < self._suppressUntil then
+			return
+		end
+		fn()
+	end)
+end
+
+-- A small draggable button that shows or hides the menu. Tap to toggle.
+function Library:_createMobileButton()
+	local theme = self.Theme
+	local button = create("TextButton", {
+		Name = "MobileButton",
+		AutoButtonColor = false,
+		Text = "",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 12, 0.5, 0),
+		Size = UDim2.fromOffset(44, 44),
+		BackgroundColor3 = theme.Panel,
+		BorderSizePixel = 0,
+		ZIndex = 80,
+		Parent = self.Gui,
+	})
+	create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = button })
+	addStroke(button, theme.Border)
+	for i = 0, 2 do
+		local line = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, (i - 1) * 7),
+			Size = UDim2.fromOffset(20, 2),
+			BackgroundColor3 = theme.Accent,
+			BorderSizePixel = 0,
+			ZIndex = 81,
+			Parent = button,
+		})
+		self:_trackAccent(line, "BackgroundColor3")
+	end
+
+	local dragged = false
+	button.InputBegan:Connect(function(input)
+		if not isPointer(input) then
+			return
+		end
+		dragged = false
+		local startPos = input.Position
+		local startFrame = button.Position
+		self._activeDrag = function(move)
+			local delta = move.Position - startPos
+			if not dragged and math.abs(delta.X) + math.abs(delta.Y) < 8 then
+				return -- still a tap
+			end
+			dragged = true
+			button.Position = UDim2.new(
+				startFrame.X.Scale,
+				startFrame.X.Offset + delta.X,
+				startFrame.Y.Scale,
+				startFrame.Y.Offset + delta.Y
+			)
+		end
+	end)
+	button.MouseButton1Click:Connect(function()
+		if not dragged then
+			self:SetOpen(not self.Open)
+		end
+	end)
+
+	self.MobileButton = button
+	return button
 end
 
 function Library:_makeDraggable(handle, target)
@@ -462,10 +617,56 @@ function Library:_attachTooltip(inst, text)
 		return
 	end
 	inst.MouseEnter:Connect(function()
-		self:_showTooltip(text)
+		-- touches can fire MouseEnter without a matching MouseLeave
+		if UserInputService:GetLastInputType() ~= Enum.UserInputType.Touch then
+			self:_showTooltip(text)
+		end
 	end)
 	inst.MouseLeave:Connect(function()
-		self:_hideTooltip()
+		if not self._tipTouch then
+			self:_hideTooltip()
+		end
+	end)
+
+	-- Touch has no hover: press and hold to read the tooltip. The release of
+	-- that press does not click the element.
+	inst.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		local token = {}
+		self._tipToken = token
+		local start = input.Position
+		task.delay(0.45, function()
+			if self._tipToken ~= token then
+				return -- released, or another press started
+			end
+			local delta = input.Position - start
+			if math.abs(delta.X) + math.abs(delta.Y) > 12 then
+				return -- the finger moved: a drag or a scroll, not a hold
+			end
+			self._tipTouch = true
+			self._suppressUntil = math.huge
+			self._activeDrag = nil
+			-- above the finger so it is not covered
+			self:_showTooltip(text, input.Position.X - 14, input.Position.Y - 64)
+		end)
+	end)
+end
+
+function Library:_endTouchTooltip()
+	local token = self._tipToken
+	self._tipToken = nil
+	if not self._tipTouch then
+		return
+	end
+	self._tipTouch = false
+	-- swallow the click that the release of the long-press produces
+	self._suppressUntil = os.clock() + 0.15
+	task.delay(1.5, function()
+		if not self._tipTouch and (self._tipToken == nil or self._tipToken == token) then
+			self:_hideTooltip()
+		end
 	end)
 end
 
@@ -744,7 +945,7 @@ function Library:Tab(name)
 		AutoButtonColor = false,
 		BackgroundColor3 = theme.Panel,
 		BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 0, 26),
+		Size = UDim2.new(1, 0, 0, self._m.Tab),
 		Font = theme.Font,
 		TextSize = theme.TextSize,
 		TextColor3 = theme.SubText,
@@ -787,12 +988,13 @@ function Library:Tab(name)
 		})
 		addList(col, 8)
 		addPadding(col, 1, 4, 1, 1)
+		table.insert(self._scrollers, col)
 		return col
 	end
 	tab.Left = column(0, 8)
 	tab.Right = column(0.5, 4)
 
-	tab.Button.MouseButton1Click:Connect(function()
+	self:_onClick(tab.Button, function()
 		self:_selectTab(tab)
 	end)
 	tab.Button.MouseEnter:Connect(function()
@@ -832,6 +1034,7 @@ end
 function Tab:Section(name, side)
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local column = (side == "Right") and self.Right or self.Left
 
 	local frame = create("Frame", {
@@ -866,7 +1069,7 @@ function Tab:Section(name, side)
 		Parent = frame,
 	})
 	addPadding(content, 8, 8, 2, 8)
-	addList(content, 6)
+	addList(content, m.Spacing)
 
 	return setmetatable({ Library = lib, Frame = frame, Content = content, _order = 0 }, Section)
 end
@@ -895,12 +1098,13 @@ function Section:Toggle(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local state = opts.Default == true
 
 	local row = create("TextButton", {
 		AutoButtonColor = false,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 18),
+		Size = UDim2.new(1, 0, 0, m.Row),
 		Text = "",
 		LayoutOrder = self:_next(),
 		Parent = self.Content,
@@ -908,8 +1112,9 @@ function Section:Toggle(opts)
 	local box = create("Frame", {
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
-		Position = UDim2.new(0, 0, 0.5, -6),
-		Size = UDim2.fromOffset(12, 12),
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(m.Check, m.Check),
 		Parent = row,
 	})
 	local boxStroke = addStroke(box, theme.Border)
@@ -923,8 +1128,8 @@ function Section:Toggle(opts)
 	})
 	lib:_trackAccent(fill, "BackgroundColor3")
 	local label = makeLabel(theme, {
-		Position = UDim2.fromOffset(20, 0),
-		Size = UDim2.new(1, -20, 1, 0),
+		Position = UDim2.fromOffset(m.Check + 8, 0),
+		Size = UDim2.new(1, -(m.Check + 8), 1, 0),
 		TextColor3 = state and theme.Text or theme.SubText,
 		Text = opts.Name or "Toggle",
 		Parent = row,
@@ -944,7 +1149,7 @@ function Section:Toggle(opts)
 		return state
 	end
 
-	row.MouseButton1Click:Connect(function()
+	lib:_onClick(row, function()
 		toggle:Set(not state)
 	end)
 	row.MouseEnter:Connect(function()
@@ -965,6 +1170,7 @@ function Section:Slider(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local min, max = opts.Min or 0, opts.Max or 100
 	local step = opts.Step or 1
 	local decimals = math.max(decimalsOf(step), decimalsOf(min))
@@ -980,7 +1186,7 @@ function Section:Slider(opts)
 
 	local holder = create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 30),
+		Size = UDim2.new(1, 0, 0, 16 + m.BarHit),
 		LayoutOrder = self:_next(),
 		Parent = self.Content,
 	})
@@ -997,14 +1203,22 @@ function Section:Slider(opts)
 		Text = "",
 		Parent = holder,
 	})
-	local bar = create("TextButton", {
+	-- `hit` is the invisible drag area (taller on touch); `bar` is the track.
+	local hit = create("TextButton", {
 		AutoButtonColor = false,
 		Text = "",
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 16),
+		Size = UDim2.new(1, 0, 0, m.BarHit),
+		Parent = holder,
+	})
+	local bar = create("Frame", {
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
-		Position = UDim2.fromOffset(0, 19),
-		Size = UDim2.new(1, 0, 0, 8),
-		Parent = holder,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.new(1, 0, 0, m.Bar),
+		Parent = hit,
 	})
 	addStroke(bar, theme.Border)
 	local fill = create("Frame", {
@@ -1041,7 +1255,7 @@ function Section:Slider(opts)
 			slider:Set(newValue)
 		end
 	end
-	bar.InputBegan:Connect(function(input)
+	hit.InputBegan:Connect(function(input)
 		if isPointer(input) then
 			lib:_beginDrag(fromInput, input)
 		end
@@ -1060,6 +1274,7 @@ function Section:Dropdown(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local multi = opts.Multi == true
 	local options = opts.Options or {}
 	local value = multi and {} or nil
@@ -1083,7 +1298,7 @@ function Section:Dropdown(opts)
 		AutoButtonColor = false,
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, m.Field),
 		Font = theme.Font,
 		TextSize = 12,
 		TextColor3 = theme.Text,
@@ -1107,7 +1322,7 @@ function Section:Dropdown(opts)
 	})
 
 	-- The option list scrolls once it has more than `maxVisible` rows.
-	local optionHeight = 18
+	local optionHeight = m.Option
 	local maxVisible = math.max(1, math.floor(tonumber(opts.MaxVisible) or 8))
 	local list = create("ScrollingFrame", {
 		BackgroundColor3 = theme.Element,
@@ -1123,6 +1338,7 @@ function Section:Dropdown(opts)
 		Parent = holder,
 	})
 	addStroke(list, theme.Border)
+	table.insert(lib._scrollers, list)
 	addList(list, 0)
 	addPadding(list, 0, 0, 2, 2)
 
@@ -1187,7 +1403,7 @@ function Section:Dropdown(opts)
 			button.MouseLeave:Connect(function()
 				button.BackgroundTransparency = 1
 			end)
-			button.MouseButton1Click:Connect(function()
+			lib:_onClick(button, function()
 				if multi then
 					local nextValue = table.clone(value)
 					local index = table.find(nextValue, option)
@@ -1241,7 +1457,7 @@ function Section:Dropdown(opts)
 		dropdown:Set(value, true)
 	end
 
-	header.MouseButton1Click:Connect(function()
+	lib:_onClick(header, function()
 		setOpen(not open)
 	end)
 
@@ -1259,18 +1475,19 @@ function Section:Keybind(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local key = opts.Default
 	local mode = opts.Mode or "Press"
 	local active = false
 
 	local row = create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 18),
+		Size = UDim2.new(1, 0, 0, m.Row),
 		LayoutOrder = self:_next(),
 		Parent = self.Content,
 	})
 	makeLabel(theme, {
-		Size = UDim2.new(1, -70, 1, 0),
+		Size = UDim2.new(1, -(m.BindWidth + 6), 1, 0),
 		Text = opts.Name or "Keybind",
 		Parent = row,
 	})
@@ -1278,7 +1495,7 @@ function Section:Keybind(opts)
 		AutoButtonColor = false,
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
-		Size = UDim2.fromOffset(64, 16),
+		Size = UDim2.fromOffset(m.BindWidth, m.Bind),
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
 		Font = theme.Font,
@@ -1328,7 +1545,7 @@ function Section:Keybind(opts)
 		return input.UserInputType == key
 	end
 
-	button.MouseButton1Click:Connect(function()
+	lib:_onClick(button, function()
 		button.Text = "[...]"
 		button.TextColor3 = theme.Accent
 		lib._listeningBind = function(input)
@@ -1343,7 +1560,7 @@ function Section:Keybind(opts)
 			elseif inputType == Enum.UserInputType.MouseButton2 or inputType == Enum.UserInputType.MouseButton3 then
 				lib._listeningBind = nil
 				bind:Set(inputType)
-			elseif inputType == Enum.UserInputType.MouseButton1 then
+			elseif inputType == Enum.UserInputType.MouseButton1 or inputType == Enum.UserInputType.Touch then
 				lib._listeningBind = nil
 				render()
 			end
@@ -1386,6 +1603,7 @@ function Section:ColorPicker(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local color = opts.Default or Color3.new(1, 1, 1)
 	local h, s, v = color:ToHSV()
 
@@ -1400,12 +1618,12 @@ function Section:ColorPicker(opts)
 
 	local row = create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 18),
+		Size = UDim2.new(1, 0, 0, m.Row),
 		LayoutOrder = 1,
 		Parent = holder,
 	})
 	makeLabel(theme, {
-		Size = UDim2.new(1, -34, 1, 0),
+		Size = UDim2.new(1, -(m.SwatchW + 8), 1, 0),
 		Text = opts.Name or "Color",
 		Parent = row,
 	})
@@ -1413,7 +1631,7 @@ function Section:ColorPicker(opts)
 		AutoButtonColor = false,
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
-		Size = UDim2.fromOffset(26, 12),
+		Size = UDim2.fromOffset(m.SwatchW, m.SwatchH),
 		BackgroundColor3 = color,
 		BorderSizePixel = 0,
 		Text = "",
@@ -1423,7 +1641,7 @@ function Section:ColorPicker(opts)
 
 	local panel = create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 126),
+		Size = UDim2.new(1, 0, 0, 108 + m.Field),
 		Visible = false,
 		LayoutOrder = 2,
 		Parent = holder,
@@ -1434,7 +1652,7 @@ function Section:ColorPicker(opts)
 		Text = "",
 		BackgroundColor3 = Color3.fromHSV(h, 1, 1),
 		BorderSizePixel = 0,
-		Size = UDim2.new(1, -22, 0, 100),
+		Size = UDim2.new(1, -(m.Hue + 8), 0, 100),
 		Parent = panel,
 	})
 	addStroke(sv, theme.Border)
@@ -1465,7 +1683,7 @@ function Section:ColorPicker(opts)
 		Text = "",
 		AnchorPoint = Vector2.new(1, 0),
 		Position = UDim2.new(1, 0, 0, 0),
-		Size = UDim2.new(0, 14, 0, 100),
+		Size = UDim2.new(0, m.Hue, 0, 100),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 		Parent = panel,
@@ -1488,7 +1706,7 @@ function Section:ColorPicker(opts)
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
 		Position = UDim2.fromOffset(0, 106),
-		Size = UDim2.new(1, 0, 0, 18),
+		Size = UDim2.new(1, 0, 0, m.Field),
 		Font = theme.Font,
 		TextSize = 12,
 		TextColor3 = theme.Text,
@@ -1554,7 +1772,7 @@ function Section:ColorPicker(opts)
 			render()
 		end
 	end)
-	swatch.MouseButton1Click:Connect(function()
+	lib:_onClick(swatch, function()
 		panel.Visible = not panel.Visible
 	end)
 
@@ -1571,11 +1789,12 @@ function Section:Textbox(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 	local value = opts.Default or ""
 
 	local holder = create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 37),
+		Size = UDim2.new(1, 0, 0, 17 + m.Field),
 		LayoutOrder = self:_next(),
 		Parent = self.Content,
 	})
@@ -1588,7 +1807,7 @@ function Section:Textbox(opts)
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
 		Position = UDim2.fromOffset(0, 17),
-		Size = UDim2.new(1, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, m.Field),
 		Font = theme.Font,
 		TextSize = 12,
 		TextColor3 = theme.Text,
@@ -1637,12 +1856,13 @@ function Section:Button(opts)
 	opts = opts or {}
 	local lib = self.Library
 	local theme = lib.Theme
+	local m = lib._m
 
 	local button = create("TextButton", {
 		AutoButtonColor = false,
 		BackgroundColor3 = theme.Element,
 		BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 0, 22),
+		Size = UDim2.new(1, 0, 0, m.Button),
 		Font = theme.Font,
 		TextSize = theme.TextSize,
 		TextColor3 = theme.Text,
@@ -1658,7 +1878,7 @@ function Section:Button(opts)
 	button.MouseLeave:Connect(function()
 		tween(button, 0.12, { BackgroundColor3 = theme.Element })
 	end)
-	button.MouseButton1Click:Connect(function()
+	lib:_onClick(button, function()
 		stroke.Color = theme.Accent
 		tween(stroke, 0.35, { Color = theme.Border })
 		safeCall(opts.Callback)

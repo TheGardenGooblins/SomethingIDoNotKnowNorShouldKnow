@@ -40,6 +40,22 @@ A dropdown shows at most `MaxVisible` options (8 by default) and scrolls when it
 
 Every element returns an object with `:Set(value, silent)` and `:Get()`. Buttons and labels use `:SetText` and `:Set` instead.
 
+## Mobile
+
+On a touch device (`UserInputService.TouchEnabled`) the library does this by itself:
+
+- It shows a small on-screen button that opens and closes the menu. Drag the button to move it.
+- It makes rows, buttons, sliders and swatches larger so they are easier to tap.
+- It shows a tooltip when you press and hold an element. That press does not click the element.
+- It shrinks the window to fit when the screen is smaller than the window.
+
+Two options of `Library.new` override the detection:
+
+| Option | Meaning |
+|---|---|
+| `MobileButton = true` or `false` | Always show, or never show, the on-screen button. The button is available as `UI.MobileButton`. |
+| `TouchMode = true` or `false` | Always use, or never use, the larger controls and press-and-hold tooltips. |
+
 ## Notifications
 
 ```lua

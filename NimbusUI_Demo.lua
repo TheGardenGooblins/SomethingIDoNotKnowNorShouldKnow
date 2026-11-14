@@ -13,6 +13,10 @@ local UI = Library.new({
 	Title = "Nimbus UI",
 	Subtitle = "demo",
 	ToggleKey = Enum.KeyCode.Insert,
+	-- Touch devices get an on-screen menu button and larger controls automatically.
+	-- Uncomment these to try them on a computer:
+	-- MobileButton = true,
+	-- TouchMode = true,
 })
 
 ------------------------------------------------------------------------
