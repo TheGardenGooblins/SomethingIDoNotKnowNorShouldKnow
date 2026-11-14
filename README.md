@@ -127,6 +127,27 @@ banner.Close()
 
 Notifications stack in the bottom-right corner. Pass `NotifyPosition = "TopRight"` to `Library.new` to move them to the top-right. Click a notification to dismiss it.
 
+## Themes
+
+`UI:SetTheme(changes)` changes colours while the menu is open. Pass only the colours you want to change:
+
+```lua
+UI:SetTheme({
+	Background = Color3.fromRGB(10, 14, 26),
+	Section = Color3.fromRGB(19, 26, 46),
+	Text = Color3.fromRGB(226, 232, 245),
+})
+
+UI:SetTheme(Library.DefaultTheme) -- back to the default colours
+```
+
+The colour names are `Background`, `Panel`, `Section`, `Element`, `Hover`, `Border`, `Text`, `SubText` and `Accent`. To start with other colours, pass the same table as `Theme` to `Library.new`.
+
+Two limits:
+
+- Give each colour name a different colour. If two names share one colour, a later `SetTheme` cannot tell their objects apart.
+- `SetTheme` does not change `Font`, `FontBold` or `TextSize`. Set those in `Theme` when you call `Library.new`.
+
 ## Errors in callbacks
 
 Each callback runs in its own thread, so a callback that fails or waits cannot stop the menu. When a callback fails, the library always writes the error to the output. It can also tell you in two other ways:

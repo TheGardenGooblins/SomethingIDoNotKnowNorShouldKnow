@@ -256,6 +256,44 @@ appearance:ColorPicker({
 	end,
 })
 
+-- SetTheme changes the other colours while the menu is open.
+appearance:Dropdown({
+	Name = "Theme",
+	Flag = "theme",
+	Options = { "Default", "Midnight", "Light" },
+	Default = "Default",
+	Callback = function(name)
+		if name == "Midnight" then
+			UI:SetTheme({
+				Background = Color3.fromRGB(10, 14, 26),
+				Panel = Color3.fromRGB(15, 20, 36),
+				Section = Color3.fromRGB(19, 26, 46),
+				Element = Color3.fromRGB(27, 36, 62),
+				Hover = Color3.fromRGB(36, 48, 80),
+				Border = Color3.fromRGB(44, 58, 96),
+				Text = Color3.fromRGB(226, 232, 245),
+				SubText = Color3.fromRGB(130, 144, 176),
+			})
+		elseif name == "Light" then
+			UI:SetTheme({
+				Background = Color3.fromRGB(236, 237, 241),
+				Panel = Color3.fromRGB(226, 227, 233),
+				Section = Color3.fromRGB(246, 246, 249),
+				Element = Color3.fromRGB(222, 223, 230),
+				Hover = Color3.fromRGB(208, 210, 220),
+				Border = Color3.fromRGB(190, 192, 204),
+				Text = Color3.fromRGB(28, 28, 36),
+				SubText = Color3.fromRGB(96, 98, 112),
+			})
+		else
+			-- the accent is left out so the accent picker above keeps its colour
+			local defaults = table.clone(Library.DefaultTheme)
+			defaults.Accent = nil
+			UI:SetTheme(defaults)
+		end
+	end,
+})
+
 appearance:Button({
 	Name = "Hide menu",
 	Tooltip = "Press Insert to show it again",

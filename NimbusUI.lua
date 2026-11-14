@@ -28,6 +28,7 @@
 
 		UI:Notify { Title, Text, Duration, Persistent, Type = "Info"|"Success"|"Warning"|"Error" }   -> :Close()
 		UI:SetAccent(Color3)   UI:SetOpen(bool)   UI:Destroy()
+		UI:SetTheme { Background, Panel, Section, Element, Hover, Border, Text, SubText, Accent }
 		UI:SaveConfig(name)    UI:LoadConfig(name)    UI:DeleteConfig(name)    UI:ListConfigs() -> { name }
 		UI:SetConfigStore { Save(name, json), Load(name), List(), Delete(name) }   (or the ConfigStore option)
 		section:ConfigManager { Name, Default, Notify, DependsOn, Callback(action, name, ok) }
@@ -73,6 +74,28 @@ local DEFAULT_THEME = {
 	FontBold = Enum.Font.GothamBold,
 	TextSize = 13,
 }
+
+Library.DefaultTheme = table.freeze(table.clone(DEFAULT_THEME))
+
+-- Used by SetTheme. For each colour property, the theme colours it can show,
+-- most likely first.
+local THEME_KEYS_FOR = {
+	BackgroundColor3 = { "Background", "Panel", "Section", "Element", "Hover", "Border" },
+	TextColor3 = { "Text", "SubText" },
+	PlaceholderColor3 = { "SubText" },
+	ScrollBarImageColor3 = { "Border", "SubText" },
+	Color = { "Border" },
+}
+local THEMED_PROPERTIES = {
+	Frame = { "BackgroundColor3" },
+	CanvasGroup = { "BackgroundColor3" },
+	ScrollingFrame = { "BackgroundColor3", "ScrollBarImageColor3" },
+	TextLabel = { "BackgroundColor3", "TextColor3" },
+	TextButton = { "BackgroundColor3", "TextColor3" },
+	TextBox = { "BackgroundColor3", "TextColor3", "PlaceholderColor3" },
+	UIStroke = { "Color" },
+}
+local THEME_COLOR_KEYS = { "Background", "Panel", "Section", "Element", "Hover", "Border", "Text", "SubText" }
 
 -- Element sizes in pixels. Touch devices get larger tap targets.
 local DESKTOP_METRICS = {
@@ -324,6 +347,8 @@ function Library.new(options)
 	self._accentHooks = {}
 	self._keybinds = {}
 	self._tabs = {}
+	-- objects whose colour is data (a picked colour, a notification type), not theme
+	self._fixedColors = setmetatable({}, { __mode = "k" })
 	self._configManagers = {}
 	self._store = nil
 	self._notifications = {}
@@ -801,6 +826,48 @@ function Library:SetOpen(open)
 	end
 end
 
+-- Changes theme colours while the menu is open. `changes` is a table with any
+-- of: Background, Panel, Section, Element, Hover, Border, Text, SubText, Accent.
+--   UI:SetTheme({ Background = Color3.fromRGB(12, 16, 28), Text = Color3.new(1, 1, 1) })
+--   UI:SetTheme(Library.DefaultTheme) -- back to the defaults
+function Library:SetTheme(changes)
+	if type(changes) ~= "table" then
+		return
+	end
+	local theme = self.Theme
+	local old = {}
+	for _, key in ipairs(THEME_COLOR_KEYS) do
+		old[key] = theme[key]
+		if typeof(changes[key]) == "Color3" then
+			theme[key] = changes[key]
+		end
+	end
+
+	-- Every themed object currently shows one of the old colours; move it to
+	-- the new colour of the same theme key. Elements read the theme table when
+	-- their state changes, so later changes use the new colours too.
+	for _, inst in ipairs(self.Gui:GetDescendants()) do
+		local properties = THEMED_PROPERTIES[inst.ClassName]
+		if properties and not self._fixedColors[inst] then
+			for _, property in ipairs(properties) do
+				local current = inst[property]
+				for _, key in ipairs(THEME_KEYS_FOR[property]) do
+					if current == old[key] then
+						if theme[key] ~= current then
+							inst[property] = theme[key]
+						end
+						break
+					end
+				end
+			end
+		end
+	end
+
+	if typeof(changes.Accent) == "Color3" then
+		self:SetAccent(changes.Accent)
+	end
+end
+
 function Library:SetAccent(color)
 	self.Theme.Accent = color
 	for _, hook in ipairs(self._accentHooks) do
@@ -852,12 +919,13 @@ function Library:Notify(opts)
 	})
 	create("UICorner", { CornerRadius = UDim.new(0, 3), Parent = toast })
 
-	create("Frame", {
+	local stripe = create("Frame", {
 		BackgroundColor3 = color,
 		BorderSizePixel = 0,
 		Size = UDim2.new(0, 2, 1, 0),
 		Parent = toast,
 	})
+	self._fixedColors[stripe] = true
 
 	local inner = create("Frame", {
 		BackgroundTransparency = 1,
@@ -904,6 +972,8 @@ function Library:Notify(opts)
 		Visible = not persistent,
 		Parent = toast,
 	})
+
+	self._fixedColors[progress] = true
 
 	local entry = { Persistent = persistent }
 	local closed = false
@@ -1942,6 +2012,10 @@ local function buildColorPicker(lib, swatchParent, panelParent, opts, swatchProp
 		BorderSizePixel = 0,
 		Parent = hueBar,
 	})
+
+	for _, fixed in ipairs({ swatch, sv, whiteLayer, blackLayer, hueBar, hueCursor }) do
+		lib._fixedColors[fixed] = true
+	end
 
 	local hexBox = create("TextBox", {
 		BackgroundColor3 = theme.Element,
