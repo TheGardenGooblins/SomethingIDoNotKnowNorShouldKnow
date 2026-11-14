@@ -143,10 +143,9 @@ UI:SetTheme(Library.DefaultTheme) -- back to the default colours
 
 The colour names are `Background`, `Panel`, `Section`, `Element`, `Hover`, `Border`, `Text`, `SubText` and `Accent`. To start with other colours, pass the same table as `Theme` to `Library.new`.
 
-Two limits:
+Two theme names can share one colour, for example the same colour for `Background`, `Panel` and `Section` in a flat theme. The library records which name each object uses, so a later `SetTheme` still changes the right objects.
 
-- Give each colour name a different colour. If two names share one colour, a later `SetTheme` cannot tell their objects apart.
-- `SetTheme` does not change `Font`, `FontBold` or `TextSize`. Set those in `Theme` when you call `Library.new`.
+`SetTheme` does not change `Font`, `FontBold` or `TextSize`. Set those in `Theme` when you call `Library.new`.
 
 ## Errors in callbacks
 

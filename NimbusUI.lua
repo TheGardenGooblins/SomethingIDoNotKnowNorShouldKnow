@@ -77,24 +77,6 @@ local DEFAULT_THEME = {
 
 Library.DefaultTheme = table.freeze(table.clone(DEFAULT_THEME))
 
--- Used by SetTheme. For each colour property, the theme colours it can show,
--- most likely first.
-local THEME_KEYS_FOR = {
-	BackgroundColor3 = { "Background", "Panel", "Section", "Element", "Hover", "Border" },
-	TextColor3 = { "Text", "SubText", "Accent" },
-	PlaceholderColor3 = { "SubText" },
-	ScrollBarImageColor3 = { "Border", "SubText" },
-	Color = { "Border", "Accent" },
-}
-local THEMED_PROPERTIES = {
-	Frame = { "BackgroundColor3" },
-	CanvasGroup = { "BackgroundColor3" },
-	ScrollingFrame = { "BackgroundColor3", "ScrollBarImageColor3" },
-	TextLabel = { "BackgroundColor3", "TextColor3" },
-	TextButton = { "BackgroundColor3", "TextColor3" },
-	TextBox = { "BackgroundColor3", "TextColor3", "PlaceholderColor3" },
-	UIStroke = { "Color" },
-}
 local THEME_COLOR_KEYS = { "Background", "Panel", "Section", "Element", "Hover", "Border", "Text", "SubText" }
 
 -- Element sizes in pixels. Touch devices get larger tap targets.
@@ -141,12 +123,44 @@ local NOTIFY_COLORS = {
 -- Helpers
 ------------------------------------------------------------------------
 
+-- Theme colours. Inside the library a theme colour is passed around as a
+-- "theme reference": a small table that names the library and the theme key
+-- (see Library.new). When a reference is put on a property, the library
+-- records which key that property uses, so SetTheme and SetAccent know
+-- exactly what to recolour, even when two keys have the same colour.
+local function isThemeRef(value)
+	return type(value) == "table" and value.__themeKey ~= nil
+end
+
+-- Records that inst[property] uses the reference's theme key and returns the
+-- key's current colour.
+local function resolveThemeRef(inst, property, ref)
+	local lib = ref.__lib
+	local roles = lib._roles[inst]
+	if not roles then
+		roles = {}
+		lib._roles[inst] = roles
+	end
+	roles[property] = ref.__themeKey
+	return lib.Theme[ref.__themeKey]
+end
+
+-- Sets a colour property to a theme reference (or a plain Color3).
+local function paint(inst, property, value)
+	if isThemeRef(value) then
+		value = resolveThemeRef(inst, property, value)
+	end
+	inst[property] = value
+end
+
 local function create(className, props, children)
 	local inst = Instance.new(className)
 	local parent
 	for key, value in pairs(props or {}) do
 		if key == "Parent" then
 			parent = value
+		elseif isThemeRef(value) then
+			inst[key] = resolveThemeRef(inst, key, value)
 		else
 			inst[key] = value
 		end
@@ -161,15 +175,23 @@ local function create(className, props, children)
 end
 
 -- The tween that is running on each object, so a theme change can stop it.
-local activeTweens = setmetatable({}, { __mode = "k" })
+local activeTweens = {}
 
+-- `props` may hold theme references.
 local function tween(inst, duration, props, style)
+	local goals = {}
+	for property, value in pairs(props) do
+		if isThemeRef(value) then
+			value = resolveThemeRef(inst, property, value)
+		end
+		goals[property] = value
+	end
 	local t = TweenService:Create(
 		inst,
 		TweenInfo.new(duration, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		props
+		goals
 	)
-	local record = { Tween = t, Goals = props }
+	local record = { Tween = t, Goals = goals }
 	activeTweens[inst] = record
 	t.Completed:Connect(function()
 		if activeTweens[inst] == record then
@@ -178,13 +200,6 @@ local function tween(inst, duration, props, style)
 	end)
 	t:Play()
 	return t
-end
-
--- True when two colours look the same. A colour that a tween has just
--- finished on can differ from its target by a rounding error, so an exact
--- comparison is not safe. The tolerance is half of one 0-255 step.
-local function sameColor(a, b)
-	return math.abs(a.R - b.R) < 0.002 and math.abs(a.G - b.G) < 0.002 and math.abs(a.B - b.B) < 0.002
 end
 
 local function addStroke(parent, color)
@@ -364,8 +379,25 @@ function Library.new(options)
 	self._accentHooks = {}
 	self._keybinds = {}
 	self._tabs = {}
-	-- objects whose colour is data (a picked colour, a notification type), not theme
-	self._fixedColors = setmetatable({}, { __mode = "k" })
+	-- [object] = { [property] = theme key }: which theme colour each property uses
+	self._roles = {}
+	-- `self._t` is what the library's own code reads colours from. It returns a
+	-- theme reference for a colour and the plain value for anything else.
+	local themeRefs = {}
+	self._t = setmetatable({}, {
+		__index = function(_, key)
+			local value = self.Theme[key]
+			if typeof(value) ~= "Color3" then
+				return value
+			end
+			local ref = themeRefs[key]
+			if not ref then
+				ref = { __themeKey = key, __lib = self }
+				themeRefs[key] = ref
+			end
+			return ref
+		end,
+	})
 	self._configManagers = {}
 	self._store = nil
 	self._notifications = {}
@@ -373,7 +405,7 @@ function Library.new(options)
 	self._activeDrag = nil
 	self._listeningBind = nil
 
-	local theme = self.Theme
+	local theme = self._t
 
 	self.Gui = create("ScreenGui", {
 		Name = "NimbusUI",
@@ -636,7 +668,7 @@ end
 
 -- A small draggable button that shows or hides the menu. Tap to toggle.
 function Library:_createMobileButton()
-	local theme = self.Theme
+	local theme = self._t
 	local button = create("TextButton", {
 		Name = "MobileButton",
 		AutoButtonColor = false,
@@ -843,49 +875,31 @@ function Library:SetOpen(open)
 	end
 end
 
--- Moves every object that shows an old theme colour to the new colour of the
--- same theme key. `old` maps theme keys to the colours they had before.
--- Elements read the theme table when their state changes, so later changes
--- use the new colours without help.
-function Library:_recolor(old)
+-- Sets every property that uses one of the theme keys in `keys` (a set) to
+-- that key's current colour.
+function Library:_repaint(keys)
 	local theme = self.Theme
-
-	local function keyOf(property, color)
-		if typeof(color) ~= "Color3" then
-			return nil
-		end
-		for _, key in ipairs(THEME_KEYS_FOR[property]) do
-			if old[key] and sameColor(color, old[key]) then
-				return key
-			end
-		end
-		return nil
-	end
-
-	for _, inst in ipairs(self.Gui:GetDescendants()) do
-		local properties = THEMED_PROPERTIES[inst.ClassName]
-		if properties and not self._fixedColors[inst] then
-			-- A colour tween that is still running (a hover fade, a click
-			-- flash) would finish on the old colour. Stop it and treat the
-			-- colour it was heading for as the current one.
-			local running = activeTweens[inst]
-			local goals = running and running.Goals or nil
-			for _, property in ipairs(properties) do
-				local goal = goals and goals[property]
-				local current = inst[property]
-				if typeof(goal) == "Color3" then
+	for inst, roles in pairs(self._roles) do
+		for property, key in pairs(roles) do
+			if keys[key] then
+				-- a colour tween that is still running (a hover fade, a click
+				-- flash) would finish on the old colour, so stop it
+				local running = activeTweens[inst]
+				if running and typeof(running.Goals[property]) == "Color3" then
 					running.Tween:Cancel()
 					activeTweens[inst] = nil
-					current = goal
 				end
-				local key = keyOf(property, current)
-				if key then
-					inst[property] = theme[key]
-				elseif typeof(goal) == "Color3" then
-					inst[property] = goal
-				end
+				inst[property] = theme[key]
 			end
 		end
+	end
+end
+
+-- Forgets the theme colours of an object that is about to be destroyed.
+function Library:_forget(inst)
+	self._roles[inst] = nil
+	for _, descendant in ipairs(inst:GetDescendants()) do
+		self._roles[descendant] = nil
 	end
 end
 
@@ -897,15 +911,14 @@ function Library:SetTheme(changes)
 	if type(changes) ~= "table" then
 		return
 	end
-	local theme = self.Theme
-	local old = {}
+	local changed = {}
 	for _, key in ipairs(THEME_COLOR_KEYS) do
 		if typeof(changes[key]) == "Color3" then
-			old[key] = theme[key]
-			theme[key] = changes[key]
+			self.Theme[key] = changes[key]
+			changed[key] = true
 		end
 	end
-	self:_recolor(old)
+	self:_repaint(changed)
 
 	if typeof(changes.Accent) == "Color3" then
 		self:SetAccent(changes.Accent)
@@ -913,14 +926,11 @@ function Library:SetTheme(changes)
 end
 
 function Library:SetAccent(color)
-	local old = { Accent = self.Theme.Accent }
 	self.Theme.Accent = color
 	for _, hook in ipairs(self._accentHooks) do
 		pcall(hook, color)
 	end
-	-- objects that only show the accent for a moment (a hovered toggle box, a
-	-- focused text box, an open dropdown) have no hook; recolour those too
-	self:_recolor(old)
+	self:_repaint({ Accent = true })
 end
 
 function Library:Destroy()
@@ -929,6 +939,7 @@ function Library:Destroy()
 	end
 	table.clear(self._connections)
 	table.clear(self._keybinds)
+	table.clear(self._roles)
 	local listenerIndex = table.find(errorListeners, self._errorListener)
 	if listenerIndex then
 		table.remove(errorListeners, listenerIndex)
@@ -948,7 +959,7 @@ function Library:Notify(opts)
 	end
 	opts = opts or {}
 
-	local theme = self.Theme
+	local theme = self._t
 	local duration = tonumber(opts.Duration) or 4
 	-- A persistent notification stays until it is clicked or :Close() is called.
 	local persistent = opts.Persistent == true or duration <= 0 or duration == math.huge
@@ -967,13 +978,12 @@ function Library:Notify(opts)
 	})
 	create("UICorner", { CornerRadius = UDim.new(0, 3), Parent = toast })
 
-	local stripe = create("Frame", {
+	create("Frame", {
 		BackgroundColor3 = color,
 		BorderSizePixel = 0,
 		Size = UDim2.new(0, 2, 1, 0),
 		Parent = toast,
 	})
-	self._fixedColors[stripe] = true
 
 	local inner = create("Frame", {
 		BackgroundTransparency = 1,
@@ -1021,8 +1031,6 @@ function Library:Notify(opts)
 		Parent = toast,
 	})
 
-	self._fixedColors[progress] = true
-
 	local entry = { Persistent = persistent }
 	local closed = false
 	function entry.Close()
@@ -1036,6 +1044,7 @@ function Library:Notify(opts)
 		end
 		local fade = tween(toast, 0.25, { GroupTransparency = 1 })
 		fade.Completed:Connect(function()
+			self:_forget(toast)
 			toast:Destroy()
 		end)
 	end
@@ -1262,7 +1271,7 @@ end
 ------------------------------------------------------------------------
 
 function Library:Tab(name)
-	local theme = self.Theme
+	local theme = self._t
 	local tab = setmetatable({ Library = self, Name = name, Selected = false }, Tab)
 
 	tab.Button = create("TextButton", {
@@ -1340,14 +1349,14 @@ function Library:Tab(name)
 end
 
 function Library:_selectTab(tab)
-	local theme = self.Theme
+	local theme = self._t
 	for _, other in ipairs(self._tabs) do
 		local active = other == tab
 		other.Selected = active
 		other.Page.Visible = active
 		other.Indicator.Visible = active
-		other.Button.TextColor3 = active and theme.Text or theme.SubText
-		other.Button.BackgroundColor3 = active and theme.Section or theme.Panel
+		paint(other.Button, "TextColor3", active and theme.Text or theme.SubText)
+		paint(other.Button, "BackgroundColor3", active and theme.Section or theme.Panel)
 	end
 end
 
@@ -1357,7 +1366,7 @@ end
 
 function Tab:Section(name, side)
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local column = (side == "Right") and self.Right or self.Left
 
@@ -1480,7 +1489,7 @@ end
 function Section:Slider(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local min, max = opts.Min or 0, opts.Max or 100
 	local step = opts.Step or 1
@@ -1585,7 +1594,7 @@ function Section:Slider(opts)
 
 	valueBox.Focused:Connect(function()
 		editing = true
-		valueBox.TextColor3 = theme.Text
+		paint(valueBox, "TextColor3", theme.Text)
 		-- show the bare number, selected, so typing replaces it
 		valueBox.Text = string.format("%." .. decimals .. "f", value)
 		valueBox.CursorPosition = #valueBox.Text + 1
@@ -1593,7 +1602,7 @@ function Section:Slider(opts)
 	end)
 	valueBox.FocusLost:Connect(function()
 		editing = false
-		valueBox.TextColor3 = theme.SubText
+		paint(valueBox, "TextColor3", theme.SubText)
 		-- accept "42", "42.5", "42,5" and "42%"; anything else is ignored
 		local text = string.gsub(valueBox.Text, ",", ".")
 		local typed = tonumber(string.match(text, "^%s*(%-?%d*%.?%d+)"))
@@ -1616,7 +1625,7 @@ end
 function Section:Dropdown(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local multi = opts.Multi == true
 	local options = withoutDuplicates(opts.Options or {})
@@ -1706,7 +1715,7 @@ function Section:Dropdown(opts)
 			header.Text = value ~= nil and tostring(value) or "None"
 		end
 		for option, button in pairs(optionButtons) do
-			button.TextColor3 = isSelected(option) and theme.Accent or theme.SubText
+			paint(button, "TextColor3", isSelected(option) and theme.Accent or theme.SubText)
 		end
 	end
 	lib:_onAccent(display)
@@ -1715,11 +1724,12 @@ function Section:Dropdown(opts)
 		open = state
 		list.Visible = open
 		arrow.Text = open and "-" or "+"
-		headerStroke.Color = open and theme.Accent or theme.Border
+		paint(headerStroke, "Color", open and theme.Accent or theme.Border)
 	end
 
 	local function build()
 		for _, button in pairs(optionButtons) do
+			lib:_forget(button)
 			button:Destroy()
 		end
 		table.clear(optionButtons)
@@ -1831,7 +1841,7 @@ end
 -- Shared by Section:Keybind and toggle:AddKeybind. `props` overrides the
 -- button's default properties.
 local function buildKeybind(lib, parent, opts, props)
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local key = opts.Default
 	local mode = opts.Mode or "Press"
@@ -1865,7 +1875,7 @@ local function buildKeybind(lib, parent, opts, props)
 
 	local function render()
 		button.Text = "[" .. keyName(key) .. "]"
-		button.TextColor3 = theme.SubText
+		paint(button, "TextColor3", theme.SubText)
 	end
 
 	local bind = {}
@@ -1897,7 +1907,7 @@ local function buildKeybind(lib, parent, opts, props)
 
 	lib:_onClick(button, function()
 		button.Text = "[...]"
-		button.TextColor3 = theme.Accent
+		paint(button, "TextColor3", theme.Accent)
 		lib._listeningBind = function(input)
 			local inputType = input.UserInputType
 			if inputType == Enum.UserInputType.Keyboard then
@@ -1951,7 +1961,7 @@ end
 function Section:Keybind(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 
 	local row = create("Frame", {
@@ -1977,7 +1987,7 @@ end
 -- inside `panelParent`. Shared by Section:ColorPicker and toggle:AddColorPicker.
 -- `swatchProps` overrides the swatch's default properties.
 local function buildColorPicker(lib, swatchParent, panelParent, opts, swatchProps, panelOrder)
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local color = opts.Default or Color3.new(1, 1, 1)
 	local h, s, v = color:ToHSV()
@@ -2060,10 +2070,6 @@ local function buildColorPicker(lib, swatchParent, panelParent, opts, swatchProp
 		BorderSizePixel = 0,
 		Parent = hueBar,
 	})
-
-	for _, fixed in ipairs({ swatch, sv, whiteLayer, blackLayer, hueBar, hueCursor }) do
-		lib._fixedColors[fixed] = true
-	end
 
 	local hexBox = create("TextBox", {
 		BackgroundColor3 = theme.Element,
@@ -2162,7 +2168,7 @@ end
 function Section:ColorPicker(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 
 	local holder = create("Frame", {
@@ -2195,7 +2201,7 @@ end
 function Section:Toggle(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local state = opts.Default == true
 
@@ -2248,7 +2254,7 @@ function Section:Toggle(opts)
 	function toggle:Set(value, silent)
 		state = value == true
 		fill.Visible = state
-		label.TextColor3 = state and theme.Text or theme.SubText
+		paint(label, "TextColor3", state and theme.Text or theme.SubText)
 		lib:_updateFlag(opts.Flag, state)
 		-- listeners run on silent changes too, so dependent elements stay correct
 		for _, listener in ipairs(changeListeners) do
@@ -2348,10 +2354,10 @@ function Section:Toggle(opts)
 		toggle:Set(not state)
 	end)
 	row.MouseEnter:Connect(function()
-		boxStroke.Color = theme.Accent
+		paint(boxStroke, "Color", theme.Accent)
 	end)
 	row.MouseLeave:Connect(function()
-		boxStroke.Color = theme.Border
+		paint(boxStroke, "Color", theme.Border)
 	end)
 	lib:_attachTooltip(row, opts.Tooltip)
 	lib:_registerFlag(opts.Flag, state, function(v)
@@ -2364,7 +2370,7 @@ end
 function Section:Textbox(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 	local value = opts.Default or ""
 
@@ -2411,10 +2417,10 @@ function Section:Textbox(opts)
 	end
 
 	box.Focused:Connect(function()
-		boxStroke.Color = theme.Accent
+		paint(boxStroke, "Color", theme.Accent)
 	end)
 	box.FocusLost:Connect(function(enterPressed)
-		boxStroke.Color = theme.Border
+		paint(boxStroke, "Color", theme.Border)
 		value = box.Text
 		lib:_updateFlag(opts.Flag, value)
 		safeCall(opts.Callback, value, enterPressed)
@@ -2431,7 +2437,7 @@ end
 function Section:Button(opts)
 	opts = opts or {}
 	local lib = self.Library
-	local theme = lib.Theme
+	local theme = lib._t
 	local m = lib._m
 
 	local button = create("TextButton", {
@@ -2455,7 +2461,7 @@ function Section:Button(opts)
 		tween(button, 0.12, { BackgroundColor3 = theme.Element })
 	end)
 	lib:_onClick(button, function()
-		stroke.Color = theme.Accent
+		paint(stroke, "Color", theme.Accent)
 		tween(stroke, 0.35, { Color = theme.Border })
 		safeCall(opts.Callback)
 	end)
@@ -2475,7 +2481,7 @@ function Section:Label(text, opts)
 		opts = text
 		text = opts.Text
 	end
-	local theme = self.Library.Theme
+	local theme = self.Library._t
 	local label = makeLabel(theme, {
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
