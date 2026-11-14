@@ -30,6 +30,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
 
 -- Optional functions that only some environments define; they are nil in a
 -- normal Roblox game. Reading them from the environment table keeps the script
@@ -409,7 +410,7 @@ function Library.new(options)
 			self._activeDrag(input)
 		end
 		if self._tooltip.Visible then
-			self._tooltip.Position = UDim2.fromOffset(input.Position.X + 14, input.Position.Y + 12)
+			self:_placeTooltip(input.Position.X, input.Position.Y)
 		end
 	end)
 
@@ -461,12 +462,59 @@ function Library:_attachTooltip(inst, text)
 		return
 	end
 	inst.MouseEnter:Connect(function()
-		self._tooltip.Text = text
-		self._tooltip.Visible = true
+		self:_showTooltip(text)
 	end)
 	inst.MouseLeave:Connect(function()
-		self._tooltip.Visible = false
+		self:_hideTooltip()
 	end)
+end
+
+-- Pointer position in the ScreenGui's coordinate space.
+function Library:_pointerPosition()
+	local position = UserInputService:GetMouseLocation()
+	if not self.Gui.IgnoreGuiInset then
+		-- GetMouseLocation counts the top bar inset; ScreenGui offsets do not
+		position -= GuiService:GetGuiInset()
+	end
+	return position
+end
+
+-- Puts the tooltip next to (x, y) and keeps it on screen.
+function Library:_placeTooltip(x, y)
+	local tip = self._tooltip
+	local screen = self.Gui.AbsoluteSize
+	local size = tip.AbsoluteSize
+	local px, py = x + 14, y + 12
+	if px + size.X > screen.X - 4 then
+		px = x - size.X - 8
+	end
+	if py + size.Y > screen.Y - 4 then
+		py = y - size.Y - 8
+	end
+	tip.Position = UDim2.fromOffset(math.max(px, 4), math.max(py, 4))
+end
+
+-- Shows the tooltip at (x, y), or at the pointer when no position is given,
+-- so it never appears at a stale position.
+function Library:_showTooltip(text, x, y)
+	if not x or not y then
+		local pointer = self:_pointerPosition()
+		x, y = pointer.X, pointer.Y
+	end
+	local tip = self._tooltip
+	tip.Text = text
+	self:_placeTooltip(x, y)
+	tip.Visible = true
+	-- the label resizes to the new text a moment later; place it again then
+	task.defer(function()
+		if tip.Visible and tip.Text == text then
+			self:_placeTooltip(x, y)
+		end
+	end)
+end
+
+function Library:_hideTooltip()
+	self._tooltip.Visible = false
 end
 
 function Library:_registerFlag(flag, value, setter)
@@ -487,7 +535,7 @@ function Library:SetOpen(open)
 	self.Open = open
 	self.Main.Visible = open
 	if not open then
-		self._tooltip.Visible = false
+		self:_hideTooltip()
 	end
 end
 
